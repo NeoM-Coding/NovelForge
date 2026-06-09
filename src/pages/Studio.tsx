@@ -25,7 +25,7 @@ interface GenParams {
 }
 
 interface StudioDraft {
-  version: 1
+  version: 2
   savedAt: string
   selectedSeriesId: number | null
   selectedParentNovelId: number | null
@@ -38,6 +38,10 @@ interface StudioDraft {
   selectedMaterialIds: number[]
   content: string
   generatedWorkId: number | null
+  useOutlineMode: boolean
+  outlineType: "overview" | "scenes" | "both"
+  outlineOverview: string
+  outlineScenes: Array<{ id: string; title: string; description: string }>
 }
 
 const DRAFT_KEY = "novelforge_studio_draft"
@@ -70,20 +74,28 @@ const TONE_OPTIONS = [
   { value: "epic", label: "史诗壮阔" },
 ]
 
-const STEPS = [
+const DEFAULT_STEPS = [
   { step: 1, label: "检索素材" },
   { step: 2, label: "组装指令" },
   { step: 3, label: "AI创作中" },
   { step: 4, label: "保存作品" },
 ]
 
-function GenerationStepper({ progress }: { progress: { step: number; message: string; completed?: boolean } }) {
+const OUTLINE_STEPS = [
+  { step: 1, label: "检索素材" },
+  { step: 2, label: "组装指令" },
+  { step: 3, label: "AI生成中" },
+  { step: 4, label: "解析大纲" },
+  { step: 5, label: "保存" },
+]
+
+function GenerationStepper({ progress, steps = DEFAULT_STEPS }: { progress: { step: number; message: string; completed?: boolean }; steps?: Array<{ step: number; label: string }> }) {
   const currentStep = progress.step
   return (
     <div className="mt-4 p-3 rounded-xl bg-white/5 border border-white/10">
       <p className="text-xs font-mono text-white/50 mb-2 text-center">{progress.message}</p>
       <div className="flex items-center justify-between">
-        {STEPS.map((s, i) => {
+        {steps.map((s, i) => {
           const isDone = currentStep > s.step || (progress.completed && currentStep >= s.step)
           const isActive = currentStep === s.step && !progress.completed
           return (
@@ -108,7 +120,7 @@ function GenerationStepper({ progress }: { progress: { step: number; message: st
                   {s.label}
                 </span>
               </div>
-              {i < STEPS.length - 1 && (
+              {i < steps.length - 1 && (
                 <div
                   className={`w-4 h-px ${
                     currentStep > s.step ? "bg-green-500/30" : "bg-white/10"
@@ -178,6 +190,13 @@ export default function Studio() {
   const [selectedTropeIds, setSelectedTropeIds] = useState<number[]>([])
   const [warnings, setWarnings] = useState<string[]>([])
 
+  // 大纲相关状态
+  const [useOutlineMode, setUseOutlineMode] = useState(false)
+  const [outlineType, setOutlineType] = useState<"overview" | "scenes" | "both">("both")
+  const [outlineOverview, setOutlineOverview] = useState("")
+  const [outlineScenes, setOutlineScenes] = useState<Array<{ id: string; title: string; description: string }>>([])
+  const [showOutlinePanel, setShowOutlinePanel] = useState(false)
+
   // 本地草稿自动保存
   const [showDraftBanner, setShowDraftBanner] = useState(false)
   const [draftInfo, setDraftInfo] = useState<{ savedAt: string } | null>(null)
@@ -244,6 +263,18 @@ export default function Studio() {
 
   // 生成 mutation
   const generateMutation = trpc.generate.fanfiction.useMutation({
+    onSuccess: () => {
+      utils.generate.list.invalidate()
+    },
+  })
+
+  const outlineMutation = trpc.generate.outline.useMutation({
+    onSuccess: () => {
+      utils.generate.list.invalidate()
+    },
+  })
+
+  const updateWorkMutation = trpc.generate.updateWork.useMutation({
     onSuccess: () => {
       utils.generate.list.invalidate()
     },
@@ -322,6 +353,20 @@ export default function Studio() {
         setSelectedCharacterIds(p.selectedCharacterIds || [])
         setSelectedTropeIds(p.selectedTropeIds || [])
       }
+      // 加载大纲（如果存在）
+      if (loadedWork.outline) {
+        const outline = loadedWork.outline as unknown as { overview?: string; scenes?: Array<{ id: string; title: string; description: string }>; outlineType?: "overview" | "scenes" | "both" }
+        setUseOutlineMode(true)
+        setShowOutlinePanel(true)
+        setOutlineType(outline.outlineType || "both")
+        setOutlineOverview(outline.overview || "")
+        setOutlineScenes(outline.scenes || [])
+      } else {
+        setUseOutlineMode(false)
+        setShowOutlinePanel(false)
+        setOutlineOverview("")
+        setOutlineScenes([])
+      }
     }
   }, [loadedWork, workId])
 
@@ -331,7 +376,7 @@ export default function Studio() {
       const raw = localStorage.getItem(DRAFT_KEY)
       if (!raw) return
       const draft = JSON.parse(raw) as StudioDraft
-      if (draft.version !== 1) {
+      if (draft.version !== 2) {
         localStorage.removeItem(DRAFT_KEY)
         return
       }
@@ -357,7 +402,7 @@ export default function Studio() {
       if (!selectedSeriesId && !brief.trim() && !title.trim() && !content) return
 
       const draft: StudioDraft = {
-        version: 1,
+        version: 2,
         savedAt: new Date().toISOString(),
         selectedSeriesId,
         selectedParentNovelId,
@@ -370,6 +415,10 @@ export default function Studio() {
         selectedMaterialIds,
         content,
         generatedWorkId,
+        useOutlineMode,
+        outlineType,
+        outlineOverview,
+        outlineScenes,
       }
       const json = JSON.stringify(draft)
       if (json === lastSavedHashRef.current) return
@@ -377,7 +426,7 @@ export default function Studio() {
       localStorage.setItem(DRAFT_KEY, json)
     }, 10000)
     return () => clearInterval(interval)
-  }, [selectedSeriesId, selectedParentNovelId, title, brief, userPrompt, params, selectedCharacterIds, selectedTropeIds, selectedMaterialIds, content, generatedWorkId])
+  }, [selectedSeriesId, selectedParentNovelId, title, brief, userPrompt, params, selectedCharacterIds, selectedTropeIds, selectedMaterialIds, content, generatedWorkId, useOutlineMode, outlineType, outlineOverview, outlineScenes])
 
   // 模拟流式显示效果
   useEffect(() => {
@@ -416,7 +465,11 @@ export default function Studio() {
       if (isMod && e.key === "Enter" && !e.shiftKey) {
         e.preventDefault()
         if (!isGenerating && selectedSeriesId && brief.trim()) {
-          handleGenerate()
+          if (useOutlineMode && outlineScenes.length === 0) {
+            handleGenerateOutline()
+          } else {
+            handleGenerate()
+          }
         }
         return
       }
@@ -432,16 +485,53 @@ export default function Studio() {
     }
     window.addEventListener("keydown", handleKeyDown)
     return () => window.removeEventListener("keydown", handleKeyDown)
-  }, [isGenerating, selectedSeriesId, brief, generatedWorkId, showRagPanel, showFeedbackDetail, showStyleSampleModal])
+  }, [isGenerating, selectedSeriesId, brief, generatedWorkId, showRagPanel, showFeedbackDetail, showStyleSampleModal, useOutlineMode, outlineScenes.length])
 
   // 处理生成
   const handleGenerate = async () => {
     if (!selectedSeriesId || !brief.trim()) return
+
+    // 大纲模式下校验数据完整性
+    if (useOutlineMode) {
+      if ((outlineType === "overview" || outlineType === "both") && !outlineOverview.trim()) {
+        toast.error("整体概述不能为空，请填写大纲概述")
+        return
+      }
+      if ((outlineType === "scenes" || outlineType === "both")) {
+        if (outlineScenes.length === 0) {
+          toast.error("场景列表不能为空，请至少添加一个场景")
+          return
+        }
+        const emptyScene = outlineScenes.find(s => !s.title.trim() || !s.description.trim())
+        if (emptyScene) {
+          toast.error("每个场景都必须填写标题和描述")
+          return
+        }
+      }
+    }
+
     setIsGenerating(true)
     setContent("")
     setDisplayContent("")
     setFeedbackState(null)
     setShowFeedbackDetail(false)
+
+    // 大纲模式下：先将用户编辑的大纲同步到数据库，再生成正文
+    if (useOutlineMode && generatedWorkId) {
+      try {
+        await updateWorkMutation.mutateAsync({
+          id: generatedWorkId,
+          outline: {
+            overview: outlineOverview,
+            scenes: outlineScenes,
+            generatedAt: new Date().toISOString(),
+            outlineType,
+          },
+        })
+      } catch {
+        // 保存失败不阻塞生成，继续用数据库中已有版本
+      }
+    }
 
     const taskId = crypto.randomUUID()
     setGenProgress({ step: 0, message: "正在启动..." })
@@ -475,6 +565,11 @@ export default function Studio() {
         selectedCharacterIds: selectedCharacterIds.length > 0 ? selectedCharacterIds : undefined,
         selectedTropeIds: selectedTropeIds.length > 0 ? selectedTropeIds : undefined,
         taskId,
+        // 新增：如果在大纲模式下且有 workId，传入 useOutline
+        ...(useOutlineMode && generatedWorkId ? {
+          useOutline: true,
+          workId: generatedWorkId,
+        } : {}),
       })
 
       setGeneratedWorkId(result.workId)
@@ -495,6 +590,69 @@ export default function Studio() {
     } catch (error) {
       console.error("Generation failed:", error)
       setGenProgress(prev => prev ? { ...prev, message: "生成失败", completed: true } : null)
+    } finally {
+      setIsGenerating(false)
+      if (progressIntervalRef.current) {
+        clearInterval(progressIntervalRef.current)
+        progressIntervalRef.current = null
+      }
+    }
+  }
+
+  // 处理大纲生成
+  const handleGenerateOutline = async () => {
+    if (!selectedSeriesId || !brief.trim()) return
+    setIsGenerating(true)
+
+    const taskId = crypto.randomUUID()
+    setGenProgress({ step: 0, message: "正在启动..." })
+
+    // 启动进度轮询
+    progressIntervalRef.current = setInterval(async () => {
+      try {
+        const p = await utils.client.generate.progress.query({ taskId })
+        if (p) {
+          setGenProgress({ step: p.step, message: p.message, completed: p.completed })
+          if (p.completed && progressIntervalRef.current) {
+            clearInterval(progressIntervalRef.current)
+            progressIntervalRef.current = null
+          }
+        }
+      } catch {
+        // 轮询失败静默处理
+      }
+    }, 1500)
+
+    try {
+      const result = await outlineMutation.mutateAsync({
+        seriesId: selectedSeriesId,
+        brief: brief.trim(),
+        parameters: params,
+        parentNovelId: selectedParentNovelId || undefined,
+        userPrompt: userPrompt.trim() || undefined,
+        useMaterials,
+        materialIds: selectedMaterialIds.length > 0 ? selectedMaterialIds : undefined,
+        selectedCharacterIds: selectedCharacterIds.length > 0 ? selectedCharacterIds : undefined,
+        selectedTropeIds: selectedTropeIds.length > 0 ? selectedTropeIds : undefined,
+        outlineType,
+        taskId,
+      })
+
+      setGeneratedWorkId(result.workId)
+      setOutlineOverview(result.outline.overview ?? "")
+      setOutlineScenes(result.outline.scenes ?? [])
+      setShowOutlinePanel(true)
+      if (result.ragCalls && result.ragCalls.length > 0) {
+        setRagCalls(result.ragCalls)
+      }
+      if (result.warnings && result.warnings.length > 0) {
+        setWarnings(result.warnings)
+      } else {
+        setWarnings([])
+      }
+    } catch (error) {
+      console.error("Outline generation failed:", error)
+      setGenProgress(prev => prev ? { ...prev, message: "大纲生成失败", completed: true } : null)
     } finally {
       setIsGenerating(false)
       if (progressIntervalRef.current) {
@@ -555,6 +713,11 @@ export default function Studio() {
       setContent(draft.content)
       setDisplayContent(draft.content)
       setGeneratedWorkId(draft.generatedWorkId)
+      setUseOutlineMode(draft.useOutlineMode)
+      setOutlineType(draft.outlineType)
+      setOutlineOverview(draft.outlineOverview)
+      setOutlineScenes(draft.outlineScenes)
+      setShowOutlinePanel(draft.useOutlineMode)
       setShowDraftBanner(false)
       toast.info("草稿已恢复")
     } catch {
@@ -665,6 +828,20 @@ export default function Studio() {
       })
       setSelectedCharacterIds(p.selectedCharacterIds || [])
       setSelectedTropeIds(p.selectedTropeIds || [])
+    }
+    // 加载大纲（如果存在）
+    if (work.outline) {
+      const outline = work.outline as unknown as { overview?: string; scenes?: Array<{ id: string; title: string; description: string }>; outlineType?: "overview" | "scenes" | "both" }
+      setUseOutlineMode(true)
+      setShowOutlinePanel(true)
+      setOutlineType(outline.outlineType || "both")
+      setOutlineOverview(outline.overview || "")
+      setOutlineScenes(outline.scenes || [])
+    } else {
+      setUseOutlineMode(false)
+      setShowOutlinePanel(false)
+      setOutlineOverview("")
+      setOutlineScenes([])
     }
   }
 
@@ -1369,6 +1546,148 @@ export default function Studio() {
               )}
             </div>
 
+            {/* 大纲面板 */}
+            <div>
+              <div className="flex items-center justify-between mb-3">
+                <label className="flex items-center gap-2 font-mono text-xs uppercase tracking-wider text-white/70">
+                  <FileText className="w-3.5 h-3.5" />
+                  大纲
+                </label>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => {
+                      setUseOutlineMode(!useOutlineMode)
+                      setShowOutlinePanel(!useOutlineMode)
+                    }}
+                    className={`text-xs px-2 py-1 rounded-full transition-colors ${
+                      useOutlineMode
+                        ? "bg-amber-500/20 text-amber-400"
+                        : "bg-white/5 text-white/50 hover:text-white/70"
+                    }`}
+                  >
+                    {useOutlineMode ? "先大纲后正文" : "直接生成正文"}
+                  </button>
+                </div>
+              </div>
+
+              {useOutlineMode && showOutlinePanel && (
+                <div className="space-y-3">
+                  {/* 生成类型选择 */}
+                  <div className="flex gap-2">
+                    {[
+                      { value: "overview" as const, label: "概述" },
+                      { value: "scenes" as const, label: "结构化" },
+                      { value: "both" as const, label: "两者" },
+                    ].map(opt => (
+                      <button
+                        key={opt.value}
+                        onClick={() => setOutlineType(opt.value)}
+                        className={`flex-1 px-2 py-1.5 rounded-lg text-xs transition-colors ${
+                          outlineType === opt.value
+                            ? "bg-amber-500/20 border border-amber-500/30 text-amber-400"
+                            : "bg-white/5 border border-transparent hover:bg-white/10 text-white/60"
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* AI 生成大纲按钮 */}
+                  {!outlineOverview && outlineScenes.length === 0 ? (
+                    <button
+                      onClick={handleGenerateOutline}
+                      disabled={isGenerating || !selectedSeriesId || !brief.trim()}
+                      className="w-full py-2 bg-white/5 hover:bg-white/10 disabled:opacity-30 text-white/70 rounded-xl text-sm transition-colors flex items-center justify-center gap-2"
+                    >
+                      <Sparkles className="w-4 h-4" />
+                      AI 生成大纲
+                    </button>
+                  ) : (
+                    <>
+                      {/* 概述编辑区 */}
+                      {(outlineType === "overview" || outlineType === "both") && (
+                        <div>
+                          <label className="text-xs text-white/50 font-mono mb-1 block">整体概述</label>
+                          <textarea
+                            value={outlineOverview}
+                            onChange={e => setOutlineOverview(e.target.value)}
+                            placeholder="大纲概述..."
+                            className="w-full h-24 px-3 py-2 rounded-xl bg-white/5 border border-white/10 focus:border-amber-500 outline-none text-[#FDFBF5] text-sm resize-none placeholder:text-white/40"
+                          />
+                        </div>
+                      )}
+
+                      {/* 场景列表 */}
+                      {(outlineType === "scenes" || outlineType === "both") && (
+                        <div className="space-y-2">
+                          <label className="text-xs text-white/50 font-mono block">场景列表</label>
+                          {outlineScenes.map((scene, idx) => (
+                            <div key={scene.id} className="p-2 rounded-lg bg-white/[0.03] border border-white/10 space-y-1.5">
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs text-white/30 font-mono w-6">{idx + 1}.</span>
+                                <input
+                                  value={scene.title}
+                                  onChange={e => {
+                                    const next = [...outlineScenes]
+                                    next[idx] = { ...scene, title: e.target.value }
+                                    setOutlineScenes(next)
+                                  }}
+                                  placeholder="场景标题"
+                                  className="flex-1 bg-transparent text-sm text-[#FDFBF5] outline-none placeholder:text-white/30"
+                                />
+                                <button
+                                  onClick={() => setOutlineScenes(prev => prev.filter((_, i) => i !== idx))}
+                                  className="p-1 rounded hover:bg-red-500/20 text-white/30 hover:text-red-400"
+                                >
+                                  <X className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                              <textarea
+                                value={scene.description}
+                                onChange={e => {
+                                  const next = [...outlineScenes]
+                                  next[idx] = { ...scene, description: e.target.value }
+                                  setOutlineScenes(next)
+                                }}
+                                placeholder="场景描述..."
+                                className="w-full h-16 px-2 py-1 rounded bg-white/5 border border-white/5 focus:border-amber-500/30 outline-none text-xs text-[#FDFBF5] resize-none placeholder:text-white/30"
+                              />
+                            </div>
+                          ))}
+                          <button
+                            onClick={() => setOutlineScenes(prev => [...prev, { id: crypto.randomUUID(), title: "", description: "" }])}
+                            className="w-full py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-white/50 hover:text-white/70 text-xs transition-colors"
+                          >
+                            + 添加场景
+                          </button>
+                        </div>
+                      )}
+
+                      {/* 确认并生成正文按钮 */}
+                      <button
+                        onClick={handleGenerate}
+                        disabled={isGenerating || !selectedSeriesId || !brief.trim()}
+                        className="w-full py-3 bg-amber-500 hover:bg-amber-400 disabled:opacity-30 text-[#111827] rounded-full font-medium text-sm transition-colors flex items-center justify-center gap-2"
+                      >
+                        {isGenerating ? (
+                          <>
+                            <Sparkles className="w-4 h-4 animate-spin" />
+                            生成中...
+                          </>
+                        ) : (
+                          <>
+                            <Wand2 className="w-4 h-4" />
+                            确认并生成正文
+                          </>
+                        )}
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+
             {/* 用户自定义提示词 */}
             <div>
               <label className="flex items-center gap-2 font-mono text-xs uppercase tracking-wider text-white/70 mb-3">
@@ -1515,27 +1834,29 @@ export default function Studio() {
             </div>
 
             {/* 生成按钮 */}
-            <button
-              onClick={handleGenerate}
-              disabled={isGenerating || !selectedSeriesId || !brief.trim()}
-              className="w-full py-3 bg-amber-500 hover:bg-amber-400 disabled:opacity-30 disabled:cursor-not-allowed text-[#111827] rounded-full font-medium text-sm transition-colors flex items-center justify-center gap-2"
-            >
-              {isGenerating ? (
-                <>
-                  <Sparkles className="w-4 h-4 animate-spin" />
-                  生成中...
-                </>
-              ) : (
-                <>
-                  <Wand2 className="w-4 h-4" />
-                  开始创作
-                </>
-              )}
-            </button>
+            {!useOutlineMode && (
+              <button
+                onClick={handleGenerate}
+                disabled={isGenerating || !selectedSeriesId || !brief.trim()}
+                className="w-full py-3 bg-amber-500 hover:bg-amber-400 disabled:opacity-30 disabled:cursor-not-allowed text-[#111827] rounded-full font-medium text-sm transition-colors flex items-center justify-center gap-2"
+              >
+                {isGenerating ? (
+                  <>
+                    <Sparkles className="w-4 h-4 animate-spin" />
+                    生成中...
+                  </>
+                ) : (
+                  <>
+                    <Wand2 className="w-4 h-4" />
+                    开始创作
+                  </>
+                )}
+              </button>
+            )}
 
             {/* 生成进度步骤条 */}
             {genProgress && (
-              <GenerationStepper progress={genProgress} />
+              <GenerationStepper progress={genProgress} steps={useOutlineMode ? OUTLINE_STEPS : DEFAULT_STEPS} />
             )}
           </div>
         </aside>

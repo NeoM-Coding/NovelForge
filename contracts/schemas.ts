@@ -144,3 +144,20 @@ export const extractedLoreSchema = z.object({
 })
 
 export type ExtractedLore = z.infer<typeof extractedLoreSchema>
+
+// 大纲
+export const outlineSceneSchema = z.object({
+  id: z.string(),
+  title: z.string().min(1),
+  description: z.string().min(1),
+})
+
+export const outlineSchema = z.object({
+  overview: z.string().optional(),
+  scenes: z.array(outlineSceneSchema).optional(),
+  generatedAt: z.string().optional(),
+  outlineType: z.enum(["overview", "scenes", "both"]).optional(),
+})
+
+export type Outline = z.infer<typeof outlineSchema>
+export type OutlineScene = z.infer<typeof outlineSceneSchema>

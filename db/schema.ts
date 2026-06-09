@@ -153,6 +153,16 @@ export const fanFictionWorks = pgTable("fan_fiction_works", {
   brief: text("brief"),
   parameters: jsonb("parameters"),
   generatedContent: text("generated_content"),
+  outline: jsonb("outline").$type<{
+    overview?: string
+    scenes?: Array<{
+      id: string
+      title: string
+      description: string
+    }>
+    generatedAt?: string
+    outlineType?: "overview" | "scenes" | "both"
+  }>(),
   status: varchar("status", { length: 50 }).notNull().default("draft"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),

@@ -5,6 +5,7 @@ import { characterCards, worldBibles, seriesCanon, fanFictionWorks, plotTropes, 
 import { eq, asc, desc, sql } from "drizzle-orm"
 import { streamChat, chatCompletion } from "../services/deepseek"
 import { searchSimilar, getEmbeddingWithCache } from "../services/embedder"
+import { type Outline } from "@contracts/schemas"
 
 const WRITING_MODES = [
   "canon_continuation",
@@ -151,6 +152,351 @@ function buildStyleGuide(fidelity: number): string {
   return parts.join("\n")
 }
 
+async function buildOutlinePrompt(
+  seriesId: number,
+  brief: string,
+  rawParams: Partial<GenParams>,
+  parentNovelId?: number,
+  userPrompt?: string,
+  useMaterials?: boolean,
+  materialIds?: number[],
+  selectedCharacterIds?: number[],
+  selectedTropeIds?: number[],
+): Promise<{ prompt: string; ragCalls: RagCall[]; warnings?: string[] }> {
+  const params: GenParams = {
+    temperature: rawParams.temperature ?? 0.8,
+    styleFidelity: rawParams.styleFidelity ?? 7,
+    characterLoyalty: rawParams.characterLoyalty ?? 8,
+    tone: rawParams.tone ?? "dramatic",
+    lengthTarget: rawParams.lengthTarget ?? "chapter",
+    canonConstraint: rawParams.canonConstraint ?? "strict",
+    writingMode: rawParams.writingMode ?? "canon_continuation",
+    ragLimit: rawParams.ragLimit ?? 5,
+  }
+  const mode = params.writingMode
+  const db = getDb()
+
+  // 1. 查询角色
+  const allCharacters = await db
+    .select()
+    .from(characterCards)
+    .where(eq(characterCards.seriesId, seriesId))
+
+  const selectedChars = selectedCharacterIds && selectedCharacterIds.length > 0
+    ? allCharacters.filter(c => selectedCharacterIds.includes(c.id))
+    : allCharacters
+
+  const unselectedChars = allCharacters.filter(c =>
+    !selectedCharacterIds || !selectedCharacterIds.includes(c.id)
+  )
+
+  // 2. Brief 角色冲突检测
+  const warnings: string[] = []
+  const briefLower = brief.toLowerCase()
+  for (const char of unselectedChars) {
+    const names = [char.name.toLowerCase(), ...(char.aliases as string[] || []).map(a => a.toLowerCase())]
+    if (names.some(n => n.length >= 2 && briefLower.includes(n))) {
+      warnings.push(`Brief 中提到了未选中的角色"${char.name}"，是否将其加入参演角色？`)
+    }
+  }
+
+  // 3. 查询世界观和正史
+  const [worldBible] = await db
+    .select()
+    .from(worldBibles)
+    .where(eq(worldBibles.seriesId, seriesId))
+
+  const canonEvents = await db
+    .select()
+    .from(seriesCanon)
+    .where(eq(seriesCanon.seriesId, seriesId))
+    .orderBy(asc(seriesCanon.eventOrder))
+
+  // 4. Hybrid RAG 检索（大纲专用权重）
+  let briefEmbedding: number[] | undefined
+  try {
+    briefEmbedding = await getEmbeddingWithCache(brief)
+  } catch {
+    // embedding 失败不影响主流程
+  }
+
+  let ragContent = ""
+  const ragParts: string[] = []
+  const ragCalls: RagCall[] = []
+  const seenChunkIds = new Set<number>()
+
+  const buildRagPrefix = (content: string): string => {
+    const containsUnselected = unselectedChars.some(c => {
+      const names = [c.name, ...(c.aliases as string[] || [])]
+      return names.some(n => content.includes(n))
+    })
+    return containsUnselected
+      ? "【⚠️ 以下素材含未授权角色，仅参考情节结构，切勿引入其中角色】\n"
+      : ""
+  }
+
+  // 大纲专用 RAG 配置：减少文风样本，增加情节素材
+  const ragConfig = {
+    novelStyleLimit: 1,
+    materialLimit: 5,
+    keywordLimit: 2,
+  }
+
+  // 4a. 从关联小说做向量检索（仅1条风格参考）
+  if (parentNovelId) {
+    const novelResults = await searchSimilar(brief, { novelId: parentNovelId, limit: ragConfig.novelStyleLimit, embedding: briefEmbedding })
+    if (novelResults.length > 0) {
+      const content = novelResults.map(r => r.enrichedContent || r.content).join("\n---\n")
+      ragParts.push(buildRagPrefix(content) + "【原作风格参考】\n" + content)
+      for (const r of novelResults) {
+        if (r.id) seenChunkIds.add(r.id)
+        ragCalls.push({
+          type: "novel_style",
+          content: r.enrichedContent || r.content,
+          score: r.similarity,
+          sourceTitle: r.sourceTitle,
+          chapterNumber: r.chapterNumber,
+          chunkIndex: r.chunkIndex,
+          totalChunks: r.totalChunks,
+          chunkId: r.id,
+        })
+      }
+    }
+  }
+
+  // 4b. 从素材池做向量检索（增加素材量）
+  if (useMaterials !== false) {
+    const materialVecResults = await searchSimilar(brief, { seriesId, limit: ragConfig.materialLimit, materialIds: materialIds?.length ? materialIds : undefined, embedding: briefEmbedding })
+    if (materialVecResults.length > 0) {
+      const content = materialVecResults.map(r => r.enrichedContent || r.content).join("\n---\n")
+      ragParts.push(buildRagPrefix(content) + "【投喂素材参考】\n" + content)
+      for (const r of materialVecResults) {
+        if (r.id) seenChunkIds.add(r.id)
+        ragCalls.push({
+          type: "material",
+          content: r.enrichedContent || r.content,
+          score: r.similarity,
+          sourceTitle: r.sourceTitle,
+          chapterNumber: r.chapterNumber,
+          chunkIndex: r.chunkIndex,
+          totalChunks: r.totalChunks,
+          chunkId: r.id,
+        })
+      }
+    }
+  }
+
+  // 4c. 全文检索补充
+  try {
+    const briefQuery = brief.slice(0, 100)
+    const fullText = await db.execute(sql`
+      SELECT id, content,
+        ts_rank(to_tsvector('simple', content), plainto_tsquery('simple', ${briefQuery})) as score
+      FROM vector_chunks
+      WHERE series_id = ${seriesId}
+        AND to_tsvector('simple', content) @@ plainto_tsquery('simple', ${briefQuery})
+      ORDER BY score DESC
+      LIMIT ${ragConfig.keywordLimit}
+    `)
+    const ftRows = Array.isArray(fullText) ? fullText : []
+    const newFtRows = ftRows.filter((r: Record<string, unknown>) => !seenChunkIds.has(Number(r.id)))
+    if (newFtRows.length > 0) {
+      const ftContent = newFtRows.map((r: Record<string, unknown>) => String(r.content)).join("\n---\n")
+      ragParts.push(buildRagPrefix(ftContent) + "【关键词参考】\n" + ftContent)
+      for (const r of newFtRows) {
+        const cid = Number(r.id)
+        seenChunkIds.add(cid)
+        ragCalls.push({ type: "keyword", content: String(r.content), score: Number(r.score), chunkId: cid })
+      }
+    }
+  } catch { /* 全文检索可选 */ }
+
+  // 4d. pg_trgm 模糊搜索补充
+  try {
+    const briefQuery = brief.slice(0, 100)
+    const trgmResults = await db.execute(sql`
+      SELECT id, content, similarity(content, ${briefQuery}) as score
+      FROM vector_chunks
+      WHERE series_id = ${seriesId}
+        AND content % ${briefQuery}
+      ORDER BY score DESC
+      LIMIT ${params.ragLimit}
+    `)
+    const trgmRows = Array.isArray(trgmResults) ? trgmResults : []
+    const newTrgmRows = trgmRows.filter((r: Record<string, unknown>) => !seenChunkIds.has(Number(r.id)))
+    if (newTrgmRows.length > 0) {
+      const trgmContent = newTrgmRows.map((r: Record<string, unknown>) => String(r.content)).join("\n---\n")
+      ragParts.push(buildRagPrefix(trgmContent) + "【模糊匹配参考】\n" + trgmContent)
+      for (const r of newTrgmRows) {
+        const cid = Number(r.id)
+        seenChunkIds.add(cid)
+        ragCalls.push({ type: "keyword", content: String(r.content), score: Number(r.score), chunkId: cid })
+      }
+    }
+  } catch { /* trgm 可选 */ }
+
+  // 5. RAG 结果 AI 摘要
+  if (ragCalls.length > 0) {
+    const ragSummary = await summarizeRagChunks(ragCalls)
+    if (ragSummary) {
+      ragContent = "\n【参考素材摘要】\n" + ragSummary
+    } else if (ragParts.length > 0) {
+      ragContent = "\n" + ragParts.join("\n\n")
+    }
+  }
+
+  // 6. 构建 System Prompt
+  const parts: string[] = [
+    `你是一位精通中文小说创作的故事架构师。当前创作模式：${MODE_CONFIG[mode].name}。请根据以下设定，为指定创作方向生成一份结构化大纲。`,
+    "",
+    "========== 核心任务（最高优先级）==========",
+    brief.trim(),
+    "",
+    "========== 角色规则 ==========",
+    MODE_CONFIG[mode].characterInstruction,
+  ]
+
+  if (selectedChars.length > 0) {
+    parts.push("")
+    parts.push("【授权角色 — 仅允许使用以下角色】")
+    for (const char of selectedChars) {
+      const traits = (char.personalityTraits as string[] || []).join("。") || "无性格标签"
+      const taboos = (char.taboos as string[] || []).join("。")
+      parts.push(`- ${char.name}: ${traits}${taboos ? ` | 禁忌: ${taboos}` : ""}${char.speechPatterns ? ` | 语言风格: ${char.speechPatterns}` : ""}`)
+    }
+  }
+
+  if (unselectedChars.length > 0) {
+    parts.push("")
+    parts.push(`【严禁出场的角色】以下角色绝对禁止在本故事大纲中出现：\n${unselectedChars.map(c => `- ${c.name}`).join("\n")}`)
+  }
+
+  // 桥段注入
+  if (selectedTropeIds && selectedTropeIds.length > 0) {
+    const tropes = await db
+      .select()
+      .from(plotTropes)
+      .where(eq(plotTropes.seriesId, seriesId))
+    const selectedTropes = tropes.filter(t => selectedTropeIds.includes(t.id))
+    if (selectedTropes.length > 0) {
+      parts.push("")
+      parts.push("【参考桥段 — 可借鉴的情节模式】")
+      for (const trope of selectedTropes) {
+        parts.push(`\n「${trope.name}」`)
+        if (trope.description) parts.push(`  描述: ${trope.description}`)
+        if (trope.pattern) parts.push(`  流程: ${trope.pattern}`)
+      }
+    }
+  }
+
+  // 世界观铁律
+  parts.push(buildWorldViewSection(worldBible))
+  parts.push("")
+  parts.push(MODE_CONFIG[mode].worldViewConstraint)
+
+  // 正史
+  if (canonEvents.length > 0) {
+    parts.push(buildCanonSection(canonEvents, mode))
+  }
+
+  // RAG 素材（不检索翻译记忆，大纲不需要文风模仿）
+  if (ragContent) {
+    parts.push("")
+    parts.push("【参考素材使用规则】以下检索到的素材仅供情节结构、角色关系和世界观参考：")
+    parts.push("1. 禁止直接复制素材中的情节或对话")
+    parts.push("2. 仅借鉴其情节结构、角色关系和世界观设定")
+    parts.push("3. 你的大纲必须与【核心任务】高度相关，不要偏离主题")
+    parts.push("")
+    parts.push("===== 参考素材开始 =====")
+    parts.push(ragContent)
+    parts.push("===== 参考素材结束 =====")
+  }
+
+  // 用户自定义
+  if (userPrompt && userPrompt.trim()) {
+    parts.push("")
+    parts.push("【用户自定义要求】（以下内容优先级最高）")
+    parts.push(userPrompt.trim())
+  }
+
+  parts.push("")
+  parts.push("========== 大纲生成要求 ==========")
+  parts.push("请生成一份结构化大纲，要求如下：")
+  parts.push("1. 每个场景必须包含：场景标题、场景目标、关键冲突、预期结果")
+  parts.push("2. 场景之间必须有逻辑递进关系，禁止突兀转折")
+  parts.push("3. 大纲必须与【核心任务】高度相关，不要偏离主题")
+  parts.push("4. 使用标准中文，禁止使用 Markdown 标记")
+  parts.push("5. 输出格式必须是结构化文本，便于后续解析")
+
+  return { prompt: parts.join("\n"), ragCalls, warnings: warnings.length > 0 ? warnings : undefined }
+}
+
+async function parseOutline(
+  rawText: string,
+  outlineType: "overview" | "scenes" | "both"
+): Promise<{ overview?: string; scenes?: Array<{ id: string; title: string; description: string }> }> {
+  // 尝试直接解析 JSON
+  try {
+    const json = JSON.parse(rawText)
+    return {
+      overview: outlineType !== "scenes" ? json.overview || json.summary || "" : undefined,
+      scenes: outlineType !== "overview"
+        ? (json.scenes || json.chapters || []).map((s: Record<string, unknown>, i: number) => ({
+            id: crypto.randomUUID(),
+            title: String(s.title || s.name || `场景${i + 1}`),
+            description: String(s.description || s.content || s.summary || ""),
+          }))
+        : undefined,
+    }
+  } catch {
+    // 不是 JSON，尝试用 AI 二次解析
+    const parsePrompt = `请将以下大纲文本解析为结构化 JSON 格式。只返回 JSON，不要任何解释。
+
+要求格式：
+{
+  "overview": "整体概述文本（如果有）",
+  "scenes": [
+    { "title": "场景标题", "description": "场景描述" }
+  ]
+}
+
+待解析文本：
+${rawText.slice(0, 3000)}`
+
+    try {
+      const parsed = await chatCompletion({
+        messages: [{ role: "user", content: parsePrompt }],
+        temperature: 0.1,
+        maxTokens: 2000,
+      })
+      const cleaned = parsed.trim().replace(/^```json\s*|\s*```$/g, "")
+      const json = JSON.parse(cleaned)
+      return {
+        overview: outlineType !== "scenes" ? json.overview || "" : undefined,
+        scenes: outlineType !== "overview"
+          ? (json.scenes || []).map((s: Record<string, unknown>, i: number) => ({
+              id: crypto.randomUUID(),
+              title: String(s.title || `场景${i + 1}`),
+              description: String(s.description || ""),
+            }))
+          : undefined,
+      }
+    } catch {
+      // 解析失败时降级为纯文本
+      return {
+        overview: outlineType !== "scenes" ? rawText.trim() : undefined,
+        scenes: outlineType !== "overview"
+          ? [{
+              id: crypto.randomUUID(),
+              title: "整体大纲",
+              description: rawText.trim(),
+            }]
+          : undefined,
+      }
+    }
+  }
+}
+
 // RAG 检索结果 AI 摘要：将碎片化的 chunks 提炼成连贯上下文
 async function summarizeRagChunks(chunks: RagCall[]): Promise<string | null> {
   if (chunks.length === 0) return null
@@ -269,7 +615,8 @@ async function buildSystemPrompt(
   materialIds?: number[],
   selectedCharacterIds?: number[],
   selectedTropeIds?: number[],
-  hotkeyTropeIds?: number[]
+  hotkeyTropeIds?: number[],
+  outlineSection?: string
 ): Promise<{ prompt: string; ragCalls: RagCall[]; warnings?: string[] }> {
   const params: GenParams = {
     temperature: rawParams.temperature ?? 0.8,
@@ -513,6 +860,12 @@ async function buildSystemPrompt(
     "",
     "========== 核心任务（最高优先级）==========",
     brief.trim(),
+    ...(outlineSection ? [
+      "",
+      "【创作大纲 — 必须严格遵循以下结构】",
+      outlineSection,
+      "你的创作必须严格按照上述大纲的场景结构展开，每个场景的内容必须与大纲描述一致。",
+    ] : []),
     `\n长度要求：${lengthDesc[params.lengthTarget]}`,
     `氛围要求：${toneMap[params.tone] || params.tone}`,
     "",
@@ -808,13 +1161,40 @@ export const generateRouter = createRouter({
       selectedCharacterIds: z.array(z.number()).optional(),
       selectedTropeIds: z.array(z.number()).optional(),
       taskId: z.string().optional(),
+      useOutline: z.boolean().optional().default(false),
+      workId: z.number().optional(),
     }))
     .mutation(async ({ input }) => {
       const taskId = input.taskId || crypto.randomUUID()
       setProgress(taskId, 1, "正在检索参考素材...")
 
       try {
+        const db = getDb()
         const hotkeyTropeIds = await getHotkeyTropeIds(input.seriesId)
+
+        // 如果用户选择使用大纲，查询并拼接
+        let outlineSection = ""
+        if (input.useOutline && input.workId) {
+          const [workRecord] = await db
+            .select()
+            .from(fanFictionWorks)
+            .where(eq(fanFictionWorks.id, input.workId))
+          if (workRecord?.outline) {
+            const outline = workRecord.outline as unknown as Outline
+            const parts: string[] = []
+            if (outline.overview) {
+              parts.push("【故事概述】" + outline.overview)
+            }
+            if (outline.scenes && outline.scenes.length > 0) {
+              parts.push("【场景规划】")
+              for (const scene of outline.scenes) {
+                parts.push(`- ${scene.title}: ${scene.description}`)
+              }
+            }
+            outlineSection = parts.join("\n")
+          }
+        }
+
         const { prompt: systemPrompt, ragCalls, warnings } = await buildSystemPrompt(
           input.seriesId,
           input.brief,
@@ -825,7 +1205,8 @@ export const generateRouter = createRouter({
           input.materialIds,
           input.selectedCharacterIds,
           input.selectedTropeIds,
-          hotkeyTropeIds
+          hotkeyTropeIds,
+          outlineSection,  // ← 新增
         )
 
         setProgress(taskId, 2, "正在组装创作指令...")
@@ -893,7 +1274,7 @@ export const generateRouter = createRouter({
       const finalTitle = input.title?.trim() || autoTitle || `二创_${new Date().toLocaleDateString()}`
 
       // 保存到数据库（将 selectedCharacterIds 存入 parameters）
-      const db = getDb()
+      // db 已在 try 块顶部声明
 
       // 生成后自检（不阻塞保存，失败时记录原因）
       let selfCritiqueResult: { passed: boolean; issues: string[] } = { passed: true, issues: [] }
@@ -951,6 +1332,92 @@ export const generateRouter = createRouter({
       failProgress(taskId, String(err))
       throw err
     }
+    }),
+
+  outline: publicQuery
+    .input(z.object({
+      seriesId: z.number(),
+      brief: z.string().min(1),
+      parameters: generationParamsSchema,
+      parentNovelId: z.number().optional(),
+      userPrompt: z.string().optional(),
+      useMaterials: z.boolean().optional(),
+      materialIds: z.array(z.number()).optional(),
+      selectedCharacterIds: z.array(z.number()).optional(),
+      selectedTropeIds: z.array(z.number()).optional(),
+      outlineType: z.enum(["overview", "scenes", "both"]).default("both"),
+      taskId: z.string().optional(),
+    }))
+    .mutation(async ({ input }) => {
+      const taskId = input.taskId || crypto.randomUUID()
+      setProgress(taskId, 1, "正在检索参考素材...")
+
+      try {
+        const { prompt: systemPrompt, ragCalls, warnings } = await buildOutlinePrompt(
+          input.seriesId,
+          input.brief,
+          input.parameters,
+          input.parentNovelId,
+          input.userPrompt,
+          input.useMaterials,
+          input.materialIds,
+          input.selectedCharacterIds,
+          input.selectedTropeIds,
+        )
+
+        setProgress(taskId, 2, "正在组装大纲指令...")
+
+        const messages = [
+          { role: "system" as const, content: systemPrompt },
+          { role: "user" as const, content: input.brief },
+        ]
+
+        setProgress(taskId, 3, "AI 正在生成大纲...")
+        const rawOutline = await generateContent(messages, input.parameters.temperature, 2000)
+
+        setProgress(taskId, 4, "正在解析大纲...")
+        const parsedOutline = await parseOutline(rawOutline, input.outlineType)
+
+        setProgress(taskId, 5, "正在保存...")
+
+        const db = getDb()
+        const [work] = await db
+          .insert(fanFictionWorks)
+          .values({
+            seriesId: input.seriesId,
+            parentNovelId: input.parentNovelId || null,
+            title: `大纲_${new Date().toLocaleDateString()}`,
+            brief: input.brief,
+            parameters: {
+              ...input.parameters,
+              selectedCharacterIds: input.selectedCharacterIds,
+              selectedTropeIds: input.selectedTropeIds,
+              ragCalls,
+            } as unknown as Record<string, unknown>,
+            generatedContent: "",
+            outline: {
+              overview: parsedOutline.overview,
+              scenes: parsedOutline.scenes,
+              generatedAt: new Date().toISOString(),
+              outlineType: input.outlineType,
+            },
+            status: "draft",
+          })
+          .returning()
+
+        completeProgress(taskId, { workId: work.id, title: work.title || "" })
+
+        return {
+          workId: work.id,
+          outline: parsedOutline,
+          ragCalls,
+          warnings,
+          taskId,
+        }
+      } catch (err) {
+        failProgress(taskId, String(err))
+        throw err
+      }
     }),
 
   progress: publicQuery
@@ -1097,6 +1564,16 @@ export const generateRouter = createRouter({
       title: z.string().optional(),
       generatedContent: z.string().optional(),
       status: z.string().optional(),
+      outline: z.object({
+        overview: z.string().optional(),
+        scenes: z.array(z.object({
+          id: z.string(),
+          title: z.string(),
+          description: z.string(),
+        })).optional(),
+        generatedAt: z.string().optional(),
+        outlineType: z.enum(["overview", "scenes", "both"]).optional(),
+      }).optional(),
     }))
     .mutation(async ({ input }) => {
       const db = getDb()
