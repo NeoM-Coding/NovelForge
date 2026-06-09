@@ -235,11 +235,12 @@ async function buildOutlinePrompt(
       : ""
   }
 
-  // 大纲专用 RAG 配置：减少文风样本，增加情节素材
+  // 大纲专用 RAG 配置：基于创作模式，但减少文风样本、增加情节素材
+  const modeConfig = MODE_RAG_CONFIG[mode]
   const ragConfig = {
-    novelStyleLimit: 1,
-    materialLimit: 5,
-    keywordLimit: 2,
+    novelStyleLimit: 1, // 大纲阶段最小化文风样本
+    materialLimit: Math.max(5, modeConfig.materialLimit), // 大纲阶段最大化情节素材
+    keywordLimit: modeConfig.keywordLimit,
   }
 
   // 4a. 从关联小说做向量检索（仅1条风格参考）
@@ -435,9 +436,10 @@ async function parseOutline(
   rawText: string,
   outlineType: "overview" | "scenes" | "both"
 ): Promise<{ overview?: string; scenes?: Array<{ id: string; title: string; description: string }> }> {
-  // 尝试直接解析 JSON
+  // 尝试直接解析 JSON（先清洗可能的 markdown 包裹）
   try {
-    const json = JSON.parse(rawText)
+    const cleaned = rawText.replace(/^```[a-z]*\s*|\s*```$/gim, "").trim()
+    const json = JSON.parse(cleaned)
     return {
       overview: outlineType !== "scenes" ? json.overview || json.summary || "" : undefined,
       scenes: outlineType !== "overview"
@@ -1179,6 +1181,9 @@ export const generateRouter = createRouter({
             .select()
             .from(fanFictionWorks)
             .where(eq(fanFictionWorks.id, input.workId))
+          if (workRecord && workRecord.seriesId !== input.seriesId) {
+            throw new Error("作品不属于当前系列")
+          }
           if (workRecord?.outline) {
             const outline = workRecord.outline as unknown as Outline
             const parts: string[] = []
@@ -1459,6 +1464,19 @@ export const generateRouter = createRouter({
         : ""
       const contextQuery = (input.brief || "请继续以下内容") + contextSuffix
 
+      // 续写时保留大纲约束
+      let outlineSection = ""
+      if (work.outline) {
+        const outline = work.outline as unknown as Outline
+        const parts: string[] = []
+        if (outline.overview) parts.push("【故事概述】" + outline.overview)
+        if (outline.scenes?.length) {
+          parts.push("【场景规划】")
+          for (const scene of outline.scenes) parts.push(`- ${scene.title}: ${scene.description}`)
+        }
+        outlineSection = parts.join("\n")
+      }
+
       const { prompt: systemPrompt, ragCalls, warnings } = await buildSystemPrompt(
         work.seriesId!,
         contextQuery,
@@ -1469,7 +1487,8 @@ export const generateRouter = createRouter({
         undefined,
         storedParams.selectedCharacterIds as number[] | undefined,
         storedParams.selectedTropeIds as number[] | undefined,
-        hotkeyTropeIds
+        hotkeyTropeIds,
+        outlineSection
       )
 
       const messages = [
@@ -1514,6 +1533,20 @@ export const generateRouter = createRouter({
 
       const regenParams = (work.parameters || {}) as Record<string, unknown>
       const hotkeyTropeIds = await getHotkeyTropeIds(work.seriesId!)
+
+      // 重写时保留大纲约束
+      let outlineSection = ""
+      if (work.outline) {
+        const outline = work.outline as unknown as Outline
+        const parts: string[] = []
+        if (outline.overview) parts.push("【故事概述】" + outline.overview)
+        if (outline.scenes?.length) {
+          parts.push("【场景规划】")
+          for (const scene of outline.scenes) parts.push(`- ${scene.title}: ${scene.description}`)
+        }
+        outlineSection = parts.join("\n")
+      }
+
       const { prompt: systemPrompt, ragCalls, warnings } = await buildSystemPrompt(
         work.seriesId!,
         input.modifiedBrief,
@@ -1524,7 +1557,8 @@ export const generateRouter = createRouter({
         undefined,
         regenParams.selectedCharacterIds as number[] | undefined,
         regenParams.selectedTropeIds as number[] | undefined,
-        hotkeyTropeIds
+        hotkeyTropeIds,
+        outlineSection
       )
 
       const messages = [

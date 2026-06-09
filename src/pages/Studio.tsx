@@ -465,7 +465,9 @@ export default function Studio() {
       if (isMod && e.key === "Enter" && !e.shiftKey) {
         e.preventDefault()
         if (!isGenerating && selectedSeriesId && brief.trim()) {
-          if (useOutlineMode && outlineScenes.length === 0) {
+          // 大纲模式下：若无内容则生成大纲，否则生成正文
+          const hasOutlineContent = outlineOverview.trim().length > 0 || outlineScenes.length > 0
+          if (useOutlineMode && !hasOutlineContent) {
             handleGenerateOutline()
           } else {
             handleGenerate()
@@ -529,14 +531,15 @@ export default function Studio() {
           },
         })
       } catch {
-        // 保存失败不阻塞生成，继续用数据库中已有版本
+        toast.warning("大纲保存失败，将使用数据库中已有版本继续生成")
       }
     }
 
     const taskId = crypto.randomUUID()
     setGenProgress({ step: 0, message: "正在启动..." })
 
-    // 启动进度轮询
+    // 启动进度轮询（先清理已有轮询防止重复）
+    if (progressIntervalRef.current) clearInterval(progressIntervalRef.current)
     progressIntervalRef.current = setInterval(async () => {
       try {
         const p = await utils.client.generate.progress.query({ taskId })
@@ -607,7 +610,8 @@ export default function Studio() {
     const taskId = crypto.randomUUID()
     setGenProgress({ step: 0, message: "正在启动..." })
 
-    // 启动进度轮询
+    // 启动进度轮询（先清理已有轮询防止重复）
+    if (progressIntervalRef.current) clearInterval(progressIntervalRef.current)
     progressIntervalRef.current = setInterval(async () => {
       try {
         const p = await utils.client.generate.progress.query({ taskId })
@@ -909,7 +913,7 @@ export default function Studio() {
               </div>
               <button
                 onClick={handleSave}
-                disabled={!generatedWorkId}
+                disabled={!generatedWorkId || !content}
                 className="flex items-center gap-2 px-4 py-1.5 rounded-full bg-white/5 hover:bg-white/10 disabled:opacity-30 text-sm transition-colors"
               >
                 <Save className="w-3.5 h-3.5" />
