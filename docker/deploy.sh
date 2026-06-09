@@ -200,8 +200,13 @@ fi
 # ──────────────────────────────────────────────────
 echo "[4/5] 启动 NovelForge ..."
 mkdir -p uploads backup
-docker compose -f docker/docker-compose.yml up -d --build
-  echo -e "${GREEN}本地构建启动成功${NC}"
+docker compose -f docker/docker-compose.image.yml pull 2>/dev/null && \
+  docker compose -f docker/docker-compose.image.yml up -d &> /dev/null && \
+  echo -e "${GREEN}预构建镜像启动成功${NC}" || {
+    echo -e "${YELLOW}预构建镜像不可用，切换到本地构建模式 ...${NC}"
+    docker compose -f docker/docker-compose.yml up -d --build
+    echo -e "${GREEN}本地构建启动成功${NC}"
+  }
 
 # ──────────────────────────────────────────────────
 # 6. 等待并显示结果

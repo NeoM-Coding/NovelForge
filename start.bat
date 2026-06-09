@@ -3,9 +3,21 @@ chcp 65001 >nul
 setlocal EnableDelayedExpansion
 
 :: NovelForge 一键启动脚本 (Windows)
-:: 用法: start.bat
+:: 用法: start.bat [image|build]
+::   image (默认): 使用预构建镜像，30 秒启动
+::   build:        本地编译，需 3-5 分钟
 
-set "MODE_DESC=本地构建"
+set "MODE=image"
+set "COMPOSE_FILE=docker\docker-compose.image.yml"
+set "BUILD_FLAG="
+set "MODE_DESC=预构建镜像"
+
+if "%~1"=="build" (
+    set "MODE=build"
+    set "COMPOSE_FILE=docker\docker-compose.yml"
+    set "BUILD_FLAG=--build"
+    set "MODE_DESC=本地构建"
+)
 
 echo ╔══════════════════════════════════════╗
 echo ║      NovelForge 一键启动脚本         ║
@@ -64,9 +76,24 @@ echo [3/5] 检查数据目录 ...
 if not exist "uploads" mkdir uploads
 echo [√] 数据目录已就绪
 
-:: 4. 构建并启动
+:: 4. 拉取镜像 / 构建并启动
 echo [4/5] 启动服务 (%MODE_DESC%) ...
-docker compose -f docker/docker-compose.yml up -d --build
+if "%MODE%"=="image" (
+    docker compose -f %COMPOSE_FILE% pull
+    if errorlevel 1 (
+        echo [!] 拉取预构建镜像失败
+        echo.
+        echo 可能原因：
+        echo   1. 预构建镜像尚未生成（GitHub Actions 未运行）
+        echo   2. GitHub Packages 未设为公开
+        echo.
+        echo 可尝试本地构建: start.bat build
+        echo.
+        pause
+        exit /b 1
+    )
+)
+docker compose -f %COMPOSE_FILE% up -d %BUILD_FLAG%
 if errorlevel 1 (
     echo [X] 启动失败
     echo 请检查上方错误信息
@@ -93,9 +120,9 @@ if not errorlevel 1 (
     echo   🗄️  数据库:   localhost:15432
     echo.
     echo 常用命令：
-    echo   查看日志: docker compose -f docker/docker-compose.yml logs -f app
-    echo   停止服务: docker compose -f docker/docker-compose.yml down
-    echo   重启服务: docker compose -f docker/docker-compose.yml restart
+    echo   查看日志: docker compose -f %COMPOSE_FILE% logs -f app
+    echo   停止服务: docker compose -f %COMPOSE_FILE% down
+    echo   重启服务: docker compose -f %COMPOSE_FILE% restart
     echo.
     echo 按任意键在浏览器中打开 ...
     pause >nul
@@ -106,7 +133,7 @@ if not errorlevel 1 (
     echo 稍后访问: http://localhost:3002
     echo.
     echo 查看实时日志：
-    echo   docker compose -f docker/docker-compose.yml logs -f
+    echo   docker compose -f %COMPOSE_FILE% logs -f
     echo.
     pause
 )
