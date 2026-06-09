@@ -22,6 +22,7 @@ export default function NovelManager() {
   const { data: allTags } = trpc.tag.list.useQuery()
   const { data: tagMap } = trpc.novel.tagMap.useQuery()
   const { data: seriesList } = trpc.lore.series.list.useQuery()
+  const { data: allProgress } = trpc.readingProgress.list.useQuery()
   const createMutation = trpc.novel.create.useMutation({
     onSuccess: () => utils.novel.list.invalidate(),
   })
@@ -139,6 +140,11 @@ export default function NovelManager() {
     if (!allTags || !tagMap) return []
     const tagIds = tagMap.filter(tm => tm.novelId === novelId).map(tm => tm.tagId)
     return allTags.filter(t => tagIds.includes(t.id))
+  }
+
+  const getNovelProgress = (novelId: number) => {
+    if (!allProgress) return null
+    return allProgress.find(p => p.novelId === novelId) || null
   }
 
   // 批量操作：全选 / 反选
@@ -364,12 +370,12 @@ export default function NovelManager() {
     <div className="min-h-screen bg-[#111827] text-[#FDFBF5]">
       <NavBar />
       <div className="max-w-[1400px] mx-auto px-4 md:px-8 py-8">
-        <div className="flex items-center justify-between mb-8">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-8 gap-4">
           <div>
             <h1 className="text-3xl font-serif font-bold">我的小说文库</h1>
             <p className="text-white/70 mt-2 font-mono text-sm">管理你的翻译与阅读项目</p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-wrap">
             {isBatchMode ? (
               <button
                 onClick={() => { setIsBatchMode(false); setSelectedNovelIds(new Set()); }}
@@ -385,7 +391,7 @@ export default function NovelManager() {
                     value={searchQuery}
                     onChange={e => setSearchQuery(e.target.value)}
                     placeholder="搜索小说..."
-                    className="pl-9 pr-4 py-2 rounded-full bg-white/5 border border-white/10 focus:border-amber-500 outline-none text-sm w-56 text-[#FDFBF5] placeholder:text-white/40"
+                    className="pl-9 pr-4 py-2 rounded-full bg-white/5 border border-white/10 focus:border-amber-500 outline-none text-sm w-full sm:w-56 text-[#FDFBF5] placeholder:text-white/40"
                   />
                 </div>
                 {filteredNovels.length > 0 && (
@@ -557,7 +563,7 @@ export default function NovelManager() {
                           setEditTitle(novel.title)
                           setEditAuthor(novel.author || "")
                         }}
-                        className="p-2 rounded-lg hover:bg-white/10 text-white/50 hover:text-white/70 transition-colors"
+                        className="p-2 rounded-lg hover:bg-white/10 text-white/50 hover:text-white/70 transition-colors min-w-[44px] min-h-[44px] flex items-center justify-center"
                         title="编辑"
                       >
                         <Edit className="w-4 h-4" />
@@ -567,7 +573,7 @@ export default function NovelManager() {
                           e.stopPropagation()
                           setOpenMenuId(openMenuId === novel.id ? null : novel.id)
                         }}
-                        className="p-2 rounded-lg hover:bg-white/10 text-white/50 hover:text-white/70 transition-colors relative"
+                        className="p-2 rounded-lg hover:bg-white/10 text-white/50 hover:text-white/70 transition-colors relative min-w-[44px] min-h-[44px] flex items-center justify-center"
                         title="更多"
                       >
                         <ChevronDown className={`w-4 h-4 transition-transform ${openMenuId === novel.id ? "rotate-180" : ""}`} />
@@ -577,7 +583,7 @@ export default function NovelManager() {
                           e.stopPropagation()
                           if (confirm("确认删除？")) deleteMutation.mutate({ id: novel.id })
                         }}
-                        className="p-2 rounded-lg hover:bg-red-500/20 text-white/50 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                        className="p-2 rounded-lg hover:bg-red-500/20 text-white/50 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity min-w-[44px] min-h-[44px] flex items-center justify-center"
                         title="删除"
                       >
                         <Trash2 className="w-4 h-4" />
@@ -618,21 +624,62 @@ export default function NovelManager() {
                     )}
                   </div>
 
+                  {/* 阅读进度 */}
+                  {(() => {
+                    const progress = getNovelProgress(novel.id)
+                    if (!progress || progress.totalChapters <= 0) return null
+                    const pct = Math.round((progress.chapterNumber / progress.totalChapters) * 100)
+                    return (
+                      <div className="mt-3 space-y-1.5">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-white/50 font-mono truncate max-w-[200px]">
+                            读到：{progress.chapterTitle || `第${progress.chapterNumber}章`}
+                          </span>
+                          <span className="text-amber-500/60 font-mono">{pct}%</span>
+                        </div>
+                        <div className="h-1 bg-white/10 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-amber-500/60 rounded-full transition-all"
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                      </div>
+                    )
+                  })()}
+
                   {/* Dropdown menu */}
                   {openMenuId === novel.id && (
                     <div
                       className="mt-3 p-2 rounded-lg bg-[#1F2937] border border-white/10 space-y-1"
                       onClick={e => e.stopPropagation()}
                     >
-                      <button
-                        onClick={() => {
-                          setOpenMenuId(null)
-                          navigate(`/reader/${novel.id}`)
-                        }}
-                        className="w-full flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-white/5 text-left text-sm text-white/70 hover:text-amber-400 transition-colors"
-                      >
-                        <BookOpen className="w-3.5 h-3.5" /> {isTranslated(novel) ? "阅读" : "阅读原文"}
-                      </button>
+                      {(() => {
+                        const progress = getNovelProgress(novel.id)
+                        if (progress) {
+                          return (
+                            <button
+                              onClick={() => {
+                                setOpenMenuId(null)
+                                navigate(`/reader/${novel.id}`)
+                              }}
+                              className="w-full flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-white/5 text-left text-sm text-amber-400 hover:text-amber-300 transition-colors"
+                            >
+                              <BookOpen className="w-3.5 h-3.5" /> 继续阅读（第{progress.chapterNumber}章）
+                            </button>
+                          )
+                        }
+                        return (
+                          <button
+                            onClick={() => {
+                              setOpenMenuId(null)
+                              navigate(`/reader/${novel.id}`)
+                            }}
+                            className="w-full flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-white/5 text-left text-sm text-white/70 hover:text-amber-400 transition-colors"
+                          >
+                            <BookOpen className="w-3.5 h-3.5" /> {isTranslated(novel) ? "阅读" : "阅读原文"}
+                          </button>
+                        )
+                      })()}
                       {!isTranslated(novel) && (
                         <button
                           onClick={() => {
@@ -1006,7 +1053,7 @@ export default function NovelManager() {
       {/* 底部批量操作栏 */}
       {isBatchMode && (
         <div className="fixed bottom-0 left-0 right-0 z-40 bg-[#1F2937]/95 backdrop-blur border-t border-white/10 px-4 md:px-8 py-3">
-          <div className="max-w-[1400px] mx-auto flex items-center justify-between">
+          <div className="max-w-[1400px] mx-auto flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-3">
               <button
                 onClick={toggleSelectAll}

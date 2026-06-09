@@ -11,6 +11,7 @@ import { annotationRouter } from "./routers/annotation"
 import { tropeRouter } from "./routers/trope"
 import { agentRouter } from "./routers/agent"
 import { auditRouter } from "./routers/audit"
+import { readingProgressRouter } from "./routers/reading-progress"
 
 export const appRouter = createRouter({
   ping: publicQuery.query(() => ({ ok: true, ts: Date.now() })),
@@ -26,6 +27,7 @@ export const appRouter = createRouter({
   trope: tropeRouter,
   agent: agentRouter,
   audit: auditRouter,
+  readingProgress: readingProgressRouter,
 })
 
 export type AppRouter = typeof appRouter

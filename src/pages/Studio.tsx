@@ -8,7 +8,7 @@ import {
   Lock, Unlock, ChevronRight, Clock,
   Thermometer, Music, FileText, Shield,
   Database, BookText, Wand2, RotateCw, BookOpen,
-  Loader2, X, AlertCircle, Theater, Trash2,
+  Loader2, X, AlertCircle, Theater, Trash2, Settings,
 } from "lucide-react"
 
 type WritingMode = "canon_continuation" | "character_spinoff" | "original_in_universe" | "alternate_universe"
@@ -187,6 +187,9 @@ export default function Studio() {
   const [showStyleSampleModal, setShowStyleSampleModal] = useState(false)
   const [styleSampleCharacterTag, setStyleSampleCharacterTag] = useState("")
   const [styleSampleSceneTag, setStyleSampleSceneTag] = useState("")
+
+  // 移动端参数面板
+  const [panelOpen, setPanelOpen] = useState(false)
 
   // 查询该系列的桥段
   const { data: seriesTropes } = trpc.trope.list.useQuery(
@@ -668,9 +671,9 @@ export default function Studio() {
   return (
     <div className="min-h-screen bg-[#111827] text-[#FDFBF5]">
       <NavBar />
-      <div className="flex flex-col md:flex-row h-[calc(100vh-3.5rem)]">
+      <div className="flex flex-col md:flex-row h-[calc(100dvh-3.5rem)] min-h-0">
         {/* 左侧编辑区 */}
-        <div className="flex-1 flex flex-col min-w-0">
+        <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
           {/* 草稿恢复横幅 */}
           {showDraftBanner && draftInfo && (
             <div className="shrink-0 px-4 md:px-6 py-2.5 bg-amber-500/10 border-b border-amber-500/20 flex items-center justify-between">
@@ -697,7 +700,7 @@ export default function Studio() {
             </div>
           )}
           {/* 顶部操作栏 */}
-          <header className="h-14 border-b border-white/10 flex items-center justify-between px-4 md:px-6 bg-[#111827]/90 backdrop-blur-md">
+          <header className="min-h-14 border-b border-white/10 flex flex-wrap items-center justify-between px-4 md:px-6 py-2 bg-[#111827]/90 backdrop-blur-md gap-2">
             <div className="flex items-center gap-3 min-w-0 flex-1">
               <PenTool className="w-4 h-4 text-amber-500 shrink-0" />
               <input
@@ -1051,8 +1054,23 @@ export default function Studio() {
           </div>
         </div>
 
+        {/* 移动端浮动设置按钮 */}
+        <button
+          onClick={() => setPanelOpen(true)}
+          className="md:hidden fixed bottom-4 right-4 z-40 w-12 h-12 rounded-full bg-amber-500 text-[#111827] shadow-lg flex items-center justify-center"
+          aria-label="创作设置"
+        >
+          <Settings className="w-5 h-5" />
+        </button>
+
         {/* 右侧 AI 控制面板 */}
-        <aside className="w-full md:w-[360px] border-l border-white/10 bg-[#111827]/95 backdrop-blur-md overflow-y-auto">
+        <aside className={`${panelOpen ? "fixed inset-0 z-30" : "hidden"} md:block md:static md:inset-auto md:z-auto w-full md:w-[360px] border-l border-white/10 bg-[#111827]/95 backdrop-blur-md overflow-y-auto`}>
+          <div className="md:hidden flex items-center justify-between p-4 border-b border-white/10">
+            <span className="font-mono text-xs text-white/70">创作设置</span>
+            <button onClick={() => setPanelOpen(false)} className="p-2 rounded-lg hover:bg-white/10 min-h-[44px] min-w-[44px]">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
           <div className="p-6 space-y-6">
             {/* 系列选择 */}
             <div>
@@ -1097,7 +1115,7 @@ export default function Studio() {
                   <button
                     key={opt.value}
                     onClick={() => setParams(p => ({ ...p, writingMode: opt.value }))}
-                    className={`text-left px-3 py-2.5 rounded-xl text-sm transition-colors border ${
+                    className={`text-left px-3 py-2.5 rounded-xl text-sm transition-colors border min-h-[44px] ${
                       params.writingMode === opt.value
                         ? "bg-amber-500/20 border-amber-500/30 text-amber-400"
                         : "bg-white/5 border-transparent hover:bg-white/10 text-white/60"
@@ -1430,7 +1448,7 @@ export default function Studio() {
                   <button
                     key={opt.value}
                     onClick={() => setParams(p => ({ ...p, tone: opt.value }))}
-                    className={`px-3 py-2 rounded-xl text-sm transition-colors ${
+                    className={`px-3 py-2 rounded-xl text-sm transition-colors min-h-[44px] ${
                       params.tone === opt.value
                         ? "bg-amber-500/20 border border-amber-500/30 text-amber-400"
                         : "bg-white/5 border border-transparent hover:bg-white/10 text-white/60"

@@ -37,12 +37,8 @@ function splitIntoChapters(text: string): ParsedChapter[] {
   }
 
   if (matches.length === 0) {
-    // 没有章节标题，整本书作为一个章节
-    return [{
-      chapterNumber: 1,
-      title: "全文",
-      content: text.trim(),
-    }]
+    // 没有章节标题，按字数自动切分章节（每章约 5000-6000 字符，优先段落边界）
+    return autoSplitChapters(text.trim())
   }
 
   let chapterNumber = 0
@@ -59,6 +55,37 @@ function splitIntoChapters(text: string): ParsedChapter[] {
       chapterNumber: ++chapterNumber,
       title: matches[i].title,
       content: bodyLines.join("\n").trim() || content,
+    })
+  }
+
+  return chapters
+}
+
+// 按字数自动切分章节（优先段落边界，目标每章 5000-6000 字符）
+function autoSplitChapters(text: string, targetSize = 5500): ParsedChapter[] {
+  const paragraphs = text.split(/\n\s*\n/).filter(p => p.trim().length > 0)
+  const chapters: ParsedChapter[] = []
+  let currentChunk = ""
+  let chapterNum = 0
+
+  for (const para of paragraphs) {
+    if (currentChunk.length + para.length > targetSize && currentChunk.length > targetSize * 0.5) {
+      chapters.push({
+        chapterNumber: ++chapterNum,
+        title: `第${chapterNum}章`,
+        content: currentChunk.trim(),
+      })
+      currentChunk = para
+    } else {
+      currentChunk += (currentChunk ? "\n\n" : "") + para
+    }
+  }
+
+  if (currentChunk.trim().length > 0) {
+    chapters.push({
+      chapterNumber: ++chapterNum,
+      title: `第${chapterNum}章`,
+      content: currentChunk.trim(),
     })
   }
 

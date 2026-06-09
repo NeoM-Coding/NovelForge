@@ -637,7 +637,7 @@ export default function MaterialPool() {
         ) : (
           <div>
             {/* 批量操作栏 */}
-            <div className="flex items-center justify-between mb-4 p-3 rounded-xl bg-white/[0.03] border border-white/10">
+            <div className="flex flex-wrap items-center justify-between mb-4 p-3 rounded-xl bg-white/[0.03] border border-white/10 gap-2">
               <div className="flex items-center gap-3">
                 <input
                   type="checkbox"
@@ -721,10 +721,10 @@ export default function MaterialPool() {
                       </div>
                       <p className="text-white/50 text-xs line-clamp-2">{m.content.slice(0, 200)}...</p>
                     </div>
-                    <div className="flex items-center gap-2 ml-4 shrink-0">
+                    <div className="flex items-center gap-2 ml-4 shrink-0 flex-wrap">
                       <button
                         onClick={() => setDetailMaterialId(m.id)}
-                        className="p-2 rounded-lg bg-white/5 hover:bg-white/10 text-white/50 hover:text-amber-400"
+                        className="p-2 rounded-lg bg-white/5 hover:bg-white/10 text-white/50 hover:text-amber-400 min-w-[44px] min-h-[44px] flex items-center justify-center"
                         title="查看详情"
                       >
                         <Eye className="w-4 h-4" />
@@ -737,7 +737,7 @@ export default function MaterialPool() {
                             }
                           }}
                           disabled={importToNovelMutation.isPending}
-                          className="p-2 rounded-lg bg-white/5 hover:bg-white/10 text-white/50 hover:text-green-400"
+                          className="p-2 rounded-lg bg-white/5 hover:bg-white/10 text-white/50 hover:text-green-400 min-w-[44px] min-h-[44px] flex items-center justify-center"
                           title="转为小说"
                         >
                           <BookOpen className="w-4 h-4" />
@@ -755,7 +755,7 @@ export default function MaterialPool() {
                             }
                           }}
                           disabled={indexAsyncMutation.isPending || (indexJobStatus?.status === "running")}
-                          className="p-2 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-400"
+                          className="p-2 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 min-w-[44px] min-h-[44px] flex items-center justify-center"
                           title={m.status === "indexed" ? "重新索引（将覆盖现有数据）" : "开始索引"}
                         >
                           <Sparkles className="w-4 h-4" />
@@ -770,7 +770,7 @@ export default function MaterialPool() {
                               extractLoreMutation.mutate({ materialId: m.id })
                             }}
                             disabled={extractLoreMutation.isPending}
-                            className="p-2 rounded-lg bg-white/5 hover:bg-white/10 text-white/50 hover:text-amber-400"
+                            className="p-2 rounded-lg bg-white/5 hover:bg-white/10 text-white/50 hover:text-amber-400 min-w-[44px] min-h-[44px] flex items-center justify-center"
                             title="提取设定（可编辑）"
                           >
                             <Library className="w-4 h-4" />
@@ -786,7 +786,7 @@ export default function MaterialPool() {
                               }
                             }}
                             disabled={autoExtractLoreMutation.isPending}
-                            className="p-2 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-400"
+                            className="p-2 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 min-w-[44px] min-h-[44px] flex items-center justify-center"
                             title="一键提取设定（自动保存）"
                           >
                             {autoExtractLoreMutation.isPending && autoExtractMaterialId === m.id ? (
@@ -798,7 +798,7 @@ export default function MaterialPool() {
                         </>
                       )}
                       <button onClick={() => { if (confirm("确认删除？")) deleteMutation.mutate({ id: m.id }); }}
-                        className="p-2 rounded-lg hover:bg-red-500/20 text-white/50 hover:text-red-400" title="删除">
+                        className="p-2 rounded-lg hover:bg-red-500/20 text-white/50 hover:text-red-400 min-w-[44px] min-h-[44px] flex items-center justify-center" title="删除">
                         <Trash2 className="w-4 h-4" />
                       </button>
                     </div>

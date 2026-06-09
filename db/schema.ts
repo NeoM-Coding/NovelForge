@@ -192,6 +192,18 @@ export const annotations = pgTable("annotations", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
 })
 
+// 阅读进度
+export const readingProgress = pgTable("reading_progress", {
+  id: serial("id").primaryKey(),
+  novelId: integer("novel_id").notNull(),
+  chapterId: integer("chapter_id").notNull(),
+  chapterNumber: integer("chapter_number").notNull().default(1),
+  chapterTitle: varchar("chapter_title", { length: 500 }),
+  totalChapters: integer("total_chapters").notNull().default(1),
+  scrollPosition: integer("scroll_position").notNull().default(0),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+})
+
 // ============================================================
 // RAG Material Pool (用户主动投喂素材)
 // ============================================================

@@ -1,7 +1,7 @@
 import { useParams, useNavigate } from "react-router"
 import { trpc } from "@/providers/trpc"
 import { useToast } from "@/providers/toast"
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import type React from "react"
 import NavBar from "@/components/NavBar"
 import {
@@ -26,6 +26,7 @@ export default function Reader() {
   const [paragraphSpacing, setParagraphSpacing] = useState(1.5)
   const [marginSize, setMarginSize] = useState(24)
   const [layoutMode, setLayoutMode] = useState<"continuous" | "paginated">("continuous")
+  const [currentPage, setCurrentPage] = useState(1)
   const [showSettings, setShowSettings] = useState(false)
   const [jumpInput, setJumpInput] = useState("")
   const [showBookmarks, setShowBookmarks] = useState(false)
@@ -75,7 +76,16 @@ export default function Reader() {
   )
   const { data: novel } = trpc.novel.getById.useQuery({ id })
   const { data: bookmarks } = trpc.chapter.bookmark.list.useQuery({ novelId: id })
+  const { data: savedProgress } = trpc.readingProgress.get.useQuery(
+    { novelId: id },
+    { enabled: id > 0 }
+  )
   const utils = trpc.useUtils()
+
+  const saveProgressMutation = trpc.readingProgress.save.useMutation()
+  const updateNovelStatusMutation = trpc.novel.update.useMutation({
+    onSuccess: () => utils.novel.list.invalidate(),
+  })
 
   const updateChapterMutation = trpc.chapter.update.useMutation({
     onSuccess: () => {
@@ -139,11 +149,17 @@ export default function Reader() {
     onSuccess: () => utils.annotation.list.invalidate({ chapterId: currentChapterId || 0 }),
   })
 
+  // 从阅读进度恢复章节（或默认第一章）
   useEffect(() => {
     if (chapterList && chapterList.length > 0 && !currentChapterId) {
-      setCurrentChapterId(chapterList[0].id)
+      if (savedProgress) {
+        const chapterExists = chapterList.some(ch => ch.id === savedProgress.chapterId)
+        setCurrentChapterId(chapterExists ? savedProgress.chapterId : chapterList[0].id)
+      } else {
+        setCurrentChapterId(chapterList[0].id)
+      }
     }
-  }, [chapterList, currentChapterId])
+  }, [chapterList, currentChapterId, savedProgress])
 
   // 自动切换阅读模式：无翻译时默认显示原文
   useEffect(() => {
@@ -154,13 +170,11 @@ export default function Reader() {
 
   // 检测段落对齐：双语模式下译文段落数与原文差异 >20% 时警告
   useEffect(() => {
-    if (
-      bilingualMode === "bilingual" &&
-      currentChapter?.contentOriginal &&
-      currentChapter?.contentTranslated
-    ) {
-      const countOriginal = currentChapter.contentOriginal.split(/\n\s*\n/).filter(p => p.trim().length > 0).length
-      const countTranslated = currentChapter.contentTranslated.split(/\n\s*\n/).filter(p => p.trim().length > 0).length
+    const orig = currentChapter?.contentOriginal
+    const trans = currentChapter?.contentTranslated
+    if (bilingualMode === "bilingual" && orig && trans) {
+      const countOriginal = orig.split(/\n\s*\n/).filter(p => p.trim().length > 0).length
+      const countTranslated = trans.split(/\n\s*\n/).filter(p => p.trim().length > 0).length
       const diff = Math.abs(countOriginal - countTranslated)
       const diffPercent = countOriginal > 0 ? diff / countOriginal : 0
       if (diffPercent > 0.2) {
@@ -171,7 +185,8 @@ export default function Reader() {
     } else {
       setParagraphMismatch(null)
     }
-  }, [bilingualMode, currentChapter])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bilingualMode, currentChapter?.contentOriginal, currentChapter?.contentTranslated])
 
   useEffect(() => {
     if (currentChapter?.contentTranslated) {
@@ -179,7 +194,7 @@ export default function Reader() {
     }
   }, [currentChapter?.contentTranslated])
 
-  // 滚动监听：显示/隐藏回到顶部按钮
+  // 滚动监听：显示/隐藏回到顶部按钮 + 自动保存阅读进度
   useEffect(() => {
     const handleScroll = () => {
       setShowBackToTop(window.scrollY > 500)
@@ -188,28 +203,72 @@ export default function Reader() {
     return () => window.removeEventListener("scroll", handleScroll)
   }, [])
 
-  // 章节切换时保存/恢复滚动位置
+  // 用 ref 存储 saveProgressMutation.mutate，避免 useEffect 依赖循环
+  const saveProgressRef = useRef(saveProgressMutation.mutate)
+  saveProgressRef.current = saveProgressMutation.mutate
+
+  // 自动保存阅读进度（2秒防抖）
+  useEffect(() => {
+    if (!currentChapterId || !chapterList) return
+
+    let debounceTimer: ReturnType<typeof setTimeout>
+
+    const handleScrollForSave = () => {
+      clearTimeout(debounceTimer)
+      debounceTimer = setTimeout(() => {
+        const idx = chapterList.findIndex(ch => ch.id === currentChapterId)
+        saveProgressRef.current({
+          novelId: id,
+          chapterId: currentChapterId,
+          chapterNumber: idx + 1,
+          chapterTitle: currentChapter?.title || undefined,
+          totalChapters: chapterList.length,
+          scrollPosition: window.scrollY,
+        })
+      }, 2000)
+    }
+
+    window.addEventListener("scroll", handleScrollForSave, { passive: true })
+    return () => {
+      window.removeEventListener("scroll", handleScrollForSave)
+      clearTimeout(debounceTimer)
+      // 离开/卸载时立即 flush（通过 ref 避免依赖循环）
+      if (currentChapterId) {
+        const idx = chapterList.findIndex(ch => ch.id === currentChapterId)
+        saveProgressRef.current({
+          novelId: id,
+          chapterId: currentChapterId,
+          chapterNumber: idx + 1,
+          chapterTitle: currentChapter?.title || undefined,
+          totalChapters: chapterList.length,
+          scrollPosition: window.scrollY,
+        })
+      }
+    }
+    // 注意：saveProgressMutation 不放入依赖，通过 ref 访问
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentChapterId, id, chapterList, currentChapter?.title])
+
+  // 章节切换时从阅读进度恢复滚动位置，并重置分页
   useEffect(() => {
     if (!currentChapterId) return
 
-    // 恢复上一章节的滚动位置
-    const saved = sessionStorage.getItem(`reader_scroll_${id}_${currentChapterId}`)
-    if (saved) {
-      const pos = parseInt(saved, 10)
-      requestAnimationFrame(() => {
-        window.scrollTo({ top: pos, behavior: "instant" })
-      })
-    } else {
-      window.scrollTo({ top: 0, behavior: "instant" })
-    }
+    setCurrentPage(1)
+    const savedScroll = savedProgress?.chapterId === currentChapterId
+      ? savedProgress.scrollPosition
+      : 0
 
-    return () => {
-      // 离开章节时保存滚动位置
-      if (currentChapterId) {
-        sessionStorage.setItem(`reader_scroll_${id}_${currentChapterId}`, String(window.scrollY))
-      }
+    requestAnimationFrame(() => {
+      window.scrollTo({ top: layoutMode === "paginated" ? 0 : savedScroll, behavior: "instant" })
+    })
+
+    // 首次打开小说时，若状态为 unread 则标记为 reading
+    if (novel?.status === "unread") {
+      updateNovelStatusMutation.mutate({ id, status: "reading" })
     }
-  }, [currentChapterId, id])
+    // 注意：layoutMode 不放在依赖数组中，避免切换布局模式时反复重置
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentChapterId, id, savedProgress, novel?.status])
 
   const currentIndex = chapterList?.findIndex(ch => ch.id === currentChapterId) ?? -1
   const totalChapters = chapterList?.length ?? 0
@@ -220,6 +279,83 @@ export default function Reader() {
       prev === "original" ? "translated" : prev === "translated" ? "bilingual" : "original"
     )
   }
+
+  // 分页：按段落边界将文本切分为多个页面（目标每页约 3000 字符）
+  const paginateContent = (text: string, targetCharsPerPage = 3000): string[] => {
+    const paragraphs = text.split(/\n\s*\n/).filter(p => p.trim().length > 0)
+    if (paragraphs.length === 0) return [""]
+    const pages: string[] = []
+    let currentPage = ""
+    for (const para of paragraphs) {
+      if (currentPage.length + para.length > targetCharsPerPage && currentPage.length > targetCharsPerPage * 0.3) {
+        pages.push(currentPage.trim())
+        currentPage = para
+      } else {
+        currentPage += (currentPage ? "\n\n" : "") + para
+      }
+    }
+    if (currentPage.trim().length > 0) {
+      pages.push(currentPage.trim())
+    }
+    return pages.length > 0 ? pages : [text]
+  }
+
+  // 用 ref 存储分页回调，避免 useEffect 依赖循环
+  const handlePrevPageRef = useRef(() => {
+    setCurrentPage(prev => Math.max(1, prev - 1))
+    window.scrollTo({ top: 0, behavior: "instant" })
+  })
+
+  const handleNextPageRef = useRef(() => {
+    const content = bilingualMode === "original"
+      ? currentChapter?.contentOriginal || ""
+      : currentChapter?.contentTranslated || currentChapter?.contentOriginal || ""
+    const totalPages = paginateContent(content).length
+    if (currentPage < totalPages) {
+      setCurrentPage(prev => prev + 1)
+      window.scrollTo({ top: 0, behavior: "instant" })
+    } else if (chapterList && currentIndex < chapterList.length - 1) {
+      setCurrentChapterId(chapterList[currentIndex + 1].id)
+    }
+  })
+
+  // 保持 ref 中存储最新回调
+  handlePrevPageRef.current = () => {
+    setCurrentPage(prev => Math.max(1, prev - 1))
+    window.scrollTo({ top: 0, behavior: "instant" })
+  }
+
+  handleNextPageRef.current = () => {
+    const content = bilingualMode === "original"
+      ? currentChapter?.contentOriginal || ""
+      : currentChapter?.contentTranslated || currentChapter?.contentOriginal || ""
+    const totalPages = paginateContent(content).length
+    if (currentPage < totalPages) {
+      setCurrentPage(prev => prev + 1)
+      window.scrollTo({ top: 0, behavior: "instant" })
+    } else if (chapterList && currentIndex < chapterList.length - 1) {
+      setCurrentChapterId(chapterList[currentIndex + 1].id)
+    }
+  }
+
+  // 键盘翻页 — 仅依赖 layoutMode，回调通过 ref 访问
+  useEffect(() => {
+    if (layoutMode !== "paginated") return
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "ArrowRight" || e.key === " ") {
+        e.preventDefault()
+        handleNextPageRef.current()
+      } else if (e.key === "ArrowLeft") {
+        e.preventDefault()
+        handlePrevPageRef.current()
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown)
+    return () => window.removeEventListener("keydown", handleKeyDown)
+  }, [layoutMode])
+
+  const handlePrevPage = () => handlePrevPageRef.current()
+  const handleNextPage = () => handleNextPageRef.current()
 
   const handleJump = () => {
     const num = parseInt(jumpInput, 10)
@@ -426,6 +562,19 @@ export default function Reader() {
 
   const hasTranslation = chapterList?.some(ch => ch.contentTranslated)
 
+  // 分页内容计算
+  const getPagedText = (text: string): string => {
+    if (layoutMode !== "paginated") return text
+    const pages = paginateContent(text)
+    return pages[currentPage - 1] || text
+  }
+
+  const originalPages = layoutMode === "paginated" ? paginateContent(currentChapter?.contentOriginal || "") : []
+  const translatedPages = layoutMode === "paginated" ? paginateContent(currentChapter?.contentTranslated || currentChapter?.contentOriginal || "") : []
+  const totalPages = bilingualMode === "bilingual"
+    ? Math.max(originalPages.length, translatedPages.length)
+    : (bilingualMode === "original" ? originalPages.length : translatedPages.length)
+
   return (
     <div className={`min-h-screen ${bgColor} ${textColor} transition-colors duration-300`}>
       <NavBar />
@@ -433,30 +582,30 @@ export default function Reader() {
       <header className={`sticky top-14 z-40 ${t.stickyBg} backdrop-blur-md border-b ${borderColor}`}>
         <div className="max-w-[800px] mx-auto px-4 h-14 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <button onClick={() => navigate("/library")} className={`p-2 ${hoverBg} rounded-lg transition-colors`} title="返回小说库">
+            <button onClick={() => navigate("/library")} className={`p-2 ${hoverBg} rounded-lg transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center`} title="返回小说库">
               <ArrowLeft className="w-5 h-5" />
             </button>
-            <button onClick={() => setShowSidebar(!showSidebar)} className={`p-2 ${hoverBg} rounded-lg transition-colors`}>
+            <button onClick={() => setShowSidebar(!showSidebar)} className={`p-2 ${hoverBg} rounded-lg transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center`}>
               <List className="w-5 h-5" />
             </button>
-            <button onClick={() => setShowBookmarks(!showBookmarks)} className={`p-2 ${hoverBg} rounded-lg transition-colors ${showBookmarks ? "text-amber-400" : ""}`} title="书签">
+            <button onClick={() => setShowBookmarks(!showBookmarks)} className={`p-2 ${hoverBg} rounded-lg transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center ${showBookmarks ? "text-amber-400" : ""}`} title="书签">
               <Bookmark className="w-5 h-5" />
             </button>
-            <button onClick={() => setShowAnnotations(!showAnnotations)} className={`p-2 ${hoverBg} rounded-lg transition-colors ${showAnnotations ? "text-amber-400" : ""}`} title="批注">
+            <button onClick={() => setShowAnnotations(!showAnnotations)} className={`p-2 ${hoverBg} rounded-lg transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center ${showAnnotations ? "text-amber-400" : ""}`} title="批注">
               <Highlighter className="w-5 h-5" />
             </button>
           </div>
-          <span className={`font-mono text-sm ${subTextColor} truncate max-w-[200px]`}>
+          <span className={`font-mono text-sm ${subTextColor} truncate max-w-[120px] sm:max-w-[200px]`}>
             {currentChapter?.title || "选择章节"}
           </span>
           <div className="flex gap-2">
-            <button onClick={cycleBilingualMode} className={`p-2 ${hoverBg} rounded-lg transition-colors`} title="切换双语">
+            <button onClick={cycleBilingualMode} className={`p-2 ${hoverBg} rounded-lg transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center`} title="切换双语">
               <Languages className="w-5 h-5" />
             </button>
-            <button onClick={() => setFontSize(s => Math.min(s + 2, 28))} className={`p-2 ${hoverBg} rounded-lg transition-colors`} title="增大字体">
+            <button onClick={() => setFontSize(s => Math.min(s + 2, 28))} className={`p-2 ${hoverBg} rounded-lg transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center`} title="增大字体">
               <Type className="w-5 h-5" />
             </button>
-            <button onClick={() => setFontSize(s => Math.max(s - 2, 12))} className={`p-2 ${hoverBg} rounded-lg transition-colors hidden sm:block`} title="减小字体">
+            <button onClick={() => setFontSize(s => Math.max(s - 2, 12))} className={`p-2 ${hoverBg} rounded-lg transition-colors hidden sm:block min-h-[44px] min-w-[44px] flex items-center justify-center`} title="减小字体">
               <Type className="w-4 h-4" />
             </button>
 
@@ -464,7 +613,7 @@ export default function Reader() {
             <div className="relative">
               <button
                 onClick={() => setShowActionMenu(!showActionMenu)}
-                className={`p-2 ${hoverBg} rounded-lg transition-colors ${showActionMenu ? "text-amber-400" : ""}`}
+                className={`p-2 ${hoverBg} rounded-lg transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center ${showActionMenu ? "text-amber-400" : ""}`}
                 title="更多操作"
               >
                 <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" /></svg>
@@ -538,7 +687,12 @@ export default function Reader() {
           />
         </div>
         <div className={`max-w-[800px] mx-auto px-4 pb-1 flex justify-between text-xs font-mono ${subTextColor}`}>
-          <span>第 {currentIndex + 1} / {totalChapters} 章</span>
+          <span>
+            第 {currentIndex + 1} / {totalChapters} 章
+            {layoutMode === "paginated" && totalPages > 1 && (
+              <span className="ml-2 opacity-60">· 第 {currentPage} / {totalPages} 页</span>
+            )}
+          </span>
           <span>{progressPercent.toFixed(0)}%</span>
         </div>
       </header>
@@ -1047,7 +1201,7 @@ export default function Reader() {
                     <p className={`font-mono text-xs ${labelColor} mb-4 uppercase tracking-wider`}>原文</p>
                     <div className={isLightTheme ? "text-black/80" : "text-white/80"}>
                       {renderParagraphs(
-                        currentChapter.contentOriginal || "",
+                        getPagedText(currentChapter.contentOriginal || ""),
                         paragraphSpacing,
                         0,
                         handleTextSelection,
@@ -1087,7 +1241,7 @@ export default function Reader() {
                   ) : (
                     <div>
                       {renderParagraphs(
-                        currentChapter.contentTranslated || currentChapter.contentOriginal || "暂无翻译",
+                        getPagedText(currentChapter.contentTranslated || currentChapter.contentOriginal || "暂无翻译"),
                         paragraphSpacing,
                         1000,
                         handleTextSelection,
@@ -1105,7 +1259,7 @@ export default function Reader() {
                   <>
                     {bilingualMode === "original" && (
                       <div className={isLightTheme ? "text-black/80" : "text-white/80"}>
-                        {renderParagraphs(currentChapter.contentOriginal || "", paragraphSpacing, 0, handleTextSelection, annotationList)}
+                        {renderParagraphs(getPagedText(currentChapter.contentOriginal || ""), paragraphSpacing, 0, handleTextSelection, annotationList)}
                       </div>
                     )}
                     {bilingualMode === "translated" && (
@@ -1136,7 +1290,7 @@ export default function Reader() {
                           </div>
                         ) : (
                           <div>
-                            {renderParagraphs(currentChapter.contentTranslated || currentChapter.contentOriginal || "暂无翻译", paragraphSpacing, 1000, handleTextSelection, annotationList)}
+                            {renderParagraphs(getPagedText(currentChapter.contentTranslated || currentChapter.contentOriginal || "暂无翻译"), paragraphSpacing, 1000, handleTextSelection, annotationList)}
                           </div>
                         )}
                       </div>
@@ -1148,6 +1302,31 @@ export default function Reader() {
             </article>
           ) : (
             <div className={`text-center ${subTextColor} mt-20`}>请选择章节开始阅读</div>
+          )}
+
+          {/* 分页导航 */}
+          {layoutMode === "paginated" && totalPages > 1 && (
+            <div className="flex items-center justify-center gap-4 mt-12 mb-4">
+              <button
+                onClick={handlePrevPage}
+                disabled={currentPage <= 1}
+                className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm ${inactiveBg} ${isLightTheme ? "hover:bg-black/10" : "hover:bg-white/10"} disabled:opacity-30 transition-colors`}
+              >
+                <ChevronLeft className="w-4 h-4" />
+                上一页
+              </button>
+              <span className={`font-mono text-sm ${subTextColor}`}>
+                第 {currentPage} / {totalPages} 页
+              </span>
+              <button
+                onClick={handleNextPage}
+                disabled={currentPage >= totalPages && currentIndex >= totalChapters - 1}
+                className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm bg-amber-500 hover:bg-amber-400 text-[#111827] disabled:opacity-30 transition-colors"
+              >
+                下一页
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
           )}
 
           <div className="flex justify-between mt-16">

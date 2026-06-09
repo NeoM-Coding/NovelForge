@@ -7,7 +7,7 @@
 set -e
 
 APP_DIR="/opt/novelforge"
-REPO_URL="https://github.com/AoiArashi50/NovelForge.git"
+REPO_URL="https://github.com/NeoM-Coding/NovelForge.git"
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'

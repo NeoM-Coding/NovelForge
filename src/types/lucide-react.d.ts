@@ -65,4 +65,6 @@ declare module "lucide-react" {
   export const CheckSquare: FC<LucideProps>
   export const Square: FC<LucideProps>
   export const Theater: FC<LucideProps>
+  export const Menu: FC<LucideProps>
+  export const AlignJustify: FC<LucideProps>
 }

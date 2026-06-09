@@ -51,7 +51,7 @@ export default function Home() {
         </header>
 
         <div className="text-center mb-20">
-          <h1 className="text-5xl font-serif font-bold mb-4 tracking-tight">
+          <h1 className="text-3xl sm:text-5xl font-serif font-bold mb-4 tracking-tight">
             <ShimmerText as="span">幻境小说工作台</ShimmerText>
           </h1>
           <p className="text-white/50 font-mono text-sm mb-8">

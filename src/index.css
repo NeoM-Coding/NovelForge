@@ -136,3 +136,48 @@ input[type="range"]::-moz-range-thumb {
 .animate-toast-in {
   animation: toastIn 0.3s ease-out both;
 }
+
+/* ========== 移动端基础样式 ========== */
+
+/* Dynamic viewport height 支持 */
+@supports (height: 100dvh) {
+  .h-dvh {
+    height: 100dvh;
+  }
+}
+
+/* 刘海屏安全区域适配 */
+@layer base {
+  body {
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}
+
+/* 隐藏滚动条工具类（横向滚动容器） */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* 消除移动端双击缩放延迟，优化触摸响应 */
+@layer base {
+  button, a, [role="button"] {
+    touch-action: manipulation;
+  }
+}
+
+/* 增大滑块触摸目标 */
+input[type="range"]::-webkit-slider-thumb {
+  width: 20px;
+  height: 20px;
+}
+
+input[type="range"]::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+}

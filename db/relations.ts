@@ -15,6 +15,7 @@ import {
   plotTropes,
   bookmarks,
   annotations,
+  readingProgress,
 } from "./schema"
 
 export const novelsRelations = relations(novels, ({ many }) => ({
@@ -22,6 +23,7 @@ export const novelsRelations = relations(novels, ({ many }) => ({
   novelTags: many(novelTags),
   bookmarks: many(bookmarks),
   annotations: many(annotations),
+  readingProgress: many(readingProgress),
   fanFictionWorks: many(fanFictionWorks),
   vectorChunks: many(vectorChunks),
   translationMemory: many(translationMemory),
@@ -154,6 +156,13 @@ export const annotationsRelations = relations(annotations, ({ one }) => ({
   chapter: one(chapters, {
     fields: [annotations.chapterId],
     references: [chapters.id],
+  }),
+}))
+
+export const readingProgressRelations = relations(readingProgress, ({ one }) => ({
+  novel: one(novels, {
+    fields: [readingProgress.novelId],
+    references: [novels.id],
   }),
 }))
 

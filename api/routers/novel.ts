@@ -1,7 +1,7 @@
 import { z } from "zod"
 import { createRouter, publicQuery } from "../middleware"
 import { getDb } from "../queries/connection"
-import { novels, chapters, novelTags, tags, materials } from "@db/schema"
+import { novels, chapters, novelTags, tags, materials, readingProgress } from "@db/schema"
 import { eq, desc, like } from "drizzle-orm"
 
 export const novelRouter = createRouter({
@@ -75,9 +75,10 @@ export const novelRouter = createRouter({
         })
       }
 
-      // 先删除关联章节
+      // 先删除关联数据
       await db.delete(chapters).where(eq(chapters.novelId, input.id))
       await db.delete(novelTags).where(eq(novelTags.novelId, input.id))
+      await db.delete(readingProgress).where(eq(readingProgress.novelId, input.id))
       await db.delete(novels).where(eq(novels.id, input.id))
       return { success: true }
     }),

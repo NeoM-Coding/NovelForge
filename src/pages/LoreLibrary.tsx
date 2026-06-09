@@ -7,7 +7,7 @@ import NavBar from "@/components/NavBar"
 import {
   Plus, Users, Globe, BookMarked, Trash2, Edit, X, Save,
   Calendar, Loader2, Sparkles, CheckSquare, Square,
-  Database, BookOpen, Theater, CheckCircle, AlertCircle,
+  Database, BookOpen, Theater, CheckCircle, AlertCircle, Library,
 } from "lucide-react"
 import Modal from "@/components/Modal"
 import LoreStatsChart from "@/components/LoreStatsChart"
@@ -20,6 +20,7 @@ export default function LoreLibrary() {
   const { data: seriesList } = trpc.lore.series.list.useQuery()
   const [selectedSeriesId, setSelectedSeriesId] = useState<number | null>(null)
   const [activeTab, setActiveTab] = useState<"characters" | "world" | "canon" | "tropes">("characters")
+  const [sidebarOpen, setSidebarOpen] = useState(false)
 
   const [showSeriesForm, setShowSeriesForm] = useState(false)
   const [showSeriesEdit, setShowSeriesEdit] = useState(false)
@@ -499,8 +500,17 @@ export default function LoreLibrary() {
           </div>
         )}
 
-        <div className="flex gap-8">
-          <aside className="w-72 shrink-0">
+        {/* Mobile sidebar toggle */}
+        <button
+          onClick={() => setSidebarOpen(!sidebarOpen)}
+          className="lg:hidden mb-4 flex items-center gap-2 px-4 py-2.5 rounded-full bg-white/5 text-sm text-white/70 min-h-[44px]"
+        >
+          <Library className="w-4 h-4" />
+          {sidebarOpen ? "收起系列" : "选择系列"}
+        </button>
+
+        <div className="flex flex-col lg:flex-row gap-8">
+          <aside className={`${sidebarOpen ? "block" : "hidden"} lg:block w-full lg:w-72 shrink-0 mb-6 lg:mb-0`}>
             <h2 className="font-mono text-xs uppercase tracking-wider text-white/50 mb-4">系列列表</h2>
             <div className="space-y-2">
               {seriesList?.map(s => (
@@ -587,7 +597,7 @@ export default function LoreLibrary() {
                           <span className="text-sm"><span className="font-semibold text-amber-400">{seriesSummary.tropeCount}</span> <span className="text-white/50 text-xs">桥段</span></span>
                         </div>
                       </div>
-                      <div className="w-48 shrink-0 -my-2">
+                      <div className="w-full sm:w-48 shrink-0 -my-2">
                         <LoreStatsChart stats={seriesSummary} />
                       </div>
                     </div>
@@ -671,7 +681,7 @@ export default function LoreLibrary() {
                 )}
 
                 {/* Tabs */}
-                <div className="flex gap-1 mb-6 bg-white/5 rounded-full p-0.5 w-fit">
+                <div className="flex gap-1 mb-6 bg-white/5 rounded-full p-0.5 w-fit overflow-x-auto max-w-full scrollbar-hide">
                   {[
                     { key: "characters" as const, label: "角色卡", icon: Users },
                     { key: "world" as const, label: "世界观", icon: Globe },
