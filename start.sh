@@ -67,7 +67,7 @@ echo -e "${GREEN}OK${NC}"
 
 # 4. 构建并启动
 echo -n "[4/5] 启动服务 ... "
-docker compose up -d --build > /tmp/novelforge-start.log 2>&1
+docker compose -f docker/docker-compose.yml up -d --build > /tmp/novelforge-start.log 2>&1
 if [ $? -ne 0 ]; then
     echo -e "${RED}失败${NC}"
     echo ""
@@ -91,9 +91,9 @@ if curl -s http://localhost:3002/api/health > /dev/null 2>&1; then
     echo "  🗄️  数据库:   localhost:15432 (PostgreSQL + pgvector)"
     echo ""
     echo "常用命令:"
-    echo "  查看日志: docker compose logs -f app"
-    echo "  停止服务: docker compose down"
-    echo "  重启服务: docker compose restart"
+    echo "  查看日志: docker compose -f docker/docker-compose.yml logs -f app"
+    echo "  停止服务: docker compose -f docker/docker-compose.yml down"
+    echo "  重启服务: docker compose -f docker/docker-compose.yml restart"
     echo ""
 else
     echo -e "${YELLOW}服务启动中，请稍等 10-30 秒${NC}"
@@ -101,5 +101,5 @@ else
     echo "等待数据库初始化完成，稍后访问: http://localhost:3002"
     echo ""
     echo "查看实时日志:"
-    echo "  docker compose logs -f"
+    echo "  docker compose -f docker/docker-compose.yml logs -f"
 fi

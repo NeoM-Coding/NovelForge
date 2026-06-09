@@ -200,13 +200,8 @@ fi
 # ──────────────────────────────────────────────────
 echo "[4/5] 启动 NovelForge ..."
 mkdir -p uploads backup
-docker compose -f docker-compose.image.yml pull 2>/dev/null && \
-  docker compose -f docker-compose.image.yml up -d &> /dev/null && \
-  echo -e "${GREEN}预构建镜像启动成功${NC}" || {
-    echo -e "${YELLOW}预构建镜像不可用，切换到本地构建模式 ...${NC}"
-    docker compose -f docker-compose.simple.yml up -d --build
-    echo -e "${GREEN}本地构建启动成功${NC}"
-  }
+docker compose -f docker/docker-compose.yml up -d --build
+  echo -e "${GREEN}本地构建启动成功${NC}"
 
 # ──────────────────────────────────────────────────
 # 6. 等待并显示结果
@@ -230,9 +225,9 @@ echo "  📁 ${APP_DIR}/uploads     (上传文件)"
 echo "  📁 ${APP_DIR}/backup      (备份存放)"
 echo ""
 echo "常用命令:"
-echo "  cd ${APP_DIR} && docker compose logs -f    # 查看日志"
-echo "  cd ${APP_DIR} && docker compose down      # 停止服务"
-echo "  cd ${APP_DIR} && docker compose restart   # 重启服务"
+echo "  cd ${APP_DIR} && docker compose -f docker/docker-compose.yml logs -f    # 查看日志"
+echo "  cd ${APP_DIR} && docker compose -f docker/docker-compose.yml down      # 停止服务"
+echo "  cd ${APP_DIR} && docker compose -f docker/docker-compose.yml restart   # 重启服务"
 echo ""
 echo "如需域名 + SSL，请继续配置 Nginx 反向代理。"
 echo ""

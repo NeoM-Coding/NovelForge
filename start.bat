@@ -66,7 +66,7 @@ echo [√] 数据目录已就绪
 
 :: 4. 构建并启动
 echo [4/5] 启动服务 (%MODE_DESC%) ...
-docker compose up -d --build
+docker compose -f docker/docker-compose.yml up -d --build
 if errorlevel 1 (
     echo [X] 启动失败
     echo 请检查上方错误信息
@@ -93,9 +93,9 @@ if not errorlevel 1 (
     echo   🗄️  数据库:   localhost:15432
     echo.
     echo 常用命令：
-    echo   查看日志: docker compose logs -f app
-    echo   停止服务: docker compose down
-    echo   重启服务: docker compose restart
+    echo   查看日志: docker compose -f docker/docker-compose.yml logs -f app
+    echo   停止服务: docker compose -f docker/docker-compose.yml down
+    echo   重启服务: docker compose -f docker/docker-compose.yml restart
     echo.
     echo 按任意键在浏览器中打开 ...
     pause >nul
@@ -106,7 +106,7 @@ if not errorlevel 1 (
     echo 稍后访问: http://localhost:3002
     echo.
     echo 查看实时日志：
-    echo   docker compose logs -f
+    echo   docker compose -f docker/docker-compose.yml logs -f
     echo.
     pause
 )
