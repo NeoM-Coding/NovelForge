@@ -53,6 +53,13 @@ async function fetchWithRetry(
     const controller = new AbortController()
     const timeoutId = setTimeout(() => controller.abort(), config.timeoutMs)
 
+    // 如果调用方传入了 signal，监听其 abort 事件并转发到本地 controller
+    let abortListener: (() => void) | undefined
+    if (init.signal) {
+      abortListener = () => controller.abort()
+      init.signal.addEventListener("abort", abortListener, { once: true })
+    }
+
     try {
       const response = await fetch(url, {
         ...init,
@@ -60,6 +67,9 @@ async function fetchWithRetry(
       })
 
       clearTimeout(timeoutId)
+      if (init.signal && abortListener) {
+        init.signal.removeEventListener("abort", abortListener)
+      }
 
       if (response.ok) {
         return response
@@ -81,6 +91,9 @@ async function fetchWithRetry(
       }
     } catch (err) {
       clearTimeout(timeoutId)
+      if (init.signal && abortListener) {
+        init.signal.removeEventListener("abort", abortListener)
+      }
 
       if (err instanceof Error && err.name === "AbortError") {
         lastError = new Error(`Request timeout after ${config.timeoutMs}ms`)
