@@ -80,6 +80,7 @@ async function generateSingleChapter(
     hotkeyTropeIds?: number[]
     outlineSection?: string
     previousContext?: string
+    worldBible?: typeof worldBibles.$inferSelect
   }
 ): Promise<{ content: string; ragCalls: RagCall[]; warnings?: string[] }> {
   const { prompt, ragCalls, warnings } = await buildSystemPrompt(
@@ -103,10 +104,20 @@ async function generateSingleChapter(
       { role: "user", content: `请创作第 ${chapterNumber} 章《${chapterTitle}》。要求：${chapterBrief}` },
     ],
     temperature: params.temperature ?? 0.8,
-    maxTokens: params.lengthTarget === "short" ? 2000 : params.lengthTarget === "arc" ? 6000 : 4000,
+    maxTokens: params.lengthTarget === "short" ? 4000 : params.lengthTarget === "arc" ? 12000 : 8000,
   })
 
-  return { content: sanitizeGeneratedContent(response), ragCalls, warnings }
+  const content = sanitizeGeneratedContent(response)
+
+  // 世界观一致性检查
+  if (options.worldBible) {
+    const { compliant, issues } = await verifyWorldViewCompliance(content, options.worldBible, seriesId)
+    if (!compliant && issues.length > 0) {
+      console.warn(`[WorldView] Chapter ${chapterNumber} issues:`, issues)
+    }
+  }
+
+  return { content, ragCalls, warnings }
 }
 
 // 清洗 AI 生成内容中的元话语
@@ -604,7 +615,7 @@ ${rawText.slice(0, 3000)}`
       const parsed = await chatCompletion({
         messages: [{ role: "user", content: parsePrompt }],
         temperature: 0.1,
-        maxTokens: 2000,
+        maxTokens: 4000,
       })
       const cleaned = parsed.trim().replace(/^```json\s*|\s*```$/g, "")
       const json = JSON.parse(cleaned)
@@ -666,7 +677,7 @@ ${chunks.map((c, i) => `【片段 ${i + 1}】${c.content}`).join("\n\n")}`
     const summary = await chatCompletion({
       messages: [{ role: "user", content: summaryPrompt }],
       temperature: 0.3,
-      maxTokens: 1200,
+      maxTokens: 2400,
     })
     const trimmed = summary.trim()
     // 如果摘要结果过短，视为失败，回退到原始 chunks 拼接
@@ -722,6 +733,41 @@ function buildWorldViewSection(worldBible: typeof worldBibles.$inferSelect | und
   }
 
   return parts.join("\n")
+}
+
+async function verifyWorldViewCompliance(
+  generatedText: string,
+  worldBible: typeof worldBibles.$inferSelect | undefined,
+  _seriesId: number
+): Promise<{ compliant: boolean; issues: string[] }> {
+  if (!worldBible) return { compliant: true, issues: [] }
+
+  const prompt = `请检查以下小说片段是否违背了世界观设定。
+
+【世界观设定】
+${buildWorldViewSection(worldBible)}
+
+【待检查片段】
+${generatedText.slice(0, 3000)}
+
+请只返回 JSON 格式：
+{
+  "compliant": true/false,
+  "issues": ["问题描述1", "问题描述2"]
+}
+如果片段完全遵守世界观，返回 compliant: true 和空 issues 数组。`
+
+  try {
+    const response = await chatCompletion({ messages: [{ role: "user", content: prompt }], temperature: 0.2, maxTokens: 1000 })
+    const cleaned = response.replace(/^```[a-z]*\s*|\s*```$/gim, "").trim()
+    const json = JSON.parse(cleaned)
+    return {
+      compliant: Boolean(json.compliant),
+      issues: Array.isArray(json.issues) ? json.issues.map(String) : [],
+    }
+  } catch {
+    return { compliant: true, issues: [] }
+  }
 }
 
 function buildCanonSection(
@@ -833,9 +879,9 @@ async function buildSystemPrompt(
 
   // 辅助数据
   const lengthDesc: Record<string, string> = {
-    short: "一个短场景，约 500-1000 字",
-    chapter: "完整一章，约 2000-4000 字",
-    arc: "多章故事线大纲，包含 3-5 章的概要",
+    short: "一个短场景，约 1000-2000 字",
+    chapter: "完整一章，约 4000-8000 字",
+    arc: "多章故事弧，约 8000-15000 字",
   }
 
   const toneMap: Record<string, string> = {
@@ -867,6 +913,10 @@ async function buildSystemPrompt(
     ] : []),
     `\n长度要求：${lengthDesc[params.lengthTarget]}`,
     `氛围要求：${toneMap[params.tone] || params.tone}`,
+    "",
+    buildWorldViewSection(worldBible),
+    "",
+    MODE_CONFIG[mode].worldViewConstraint,
     "",
     "========== 角色规则 ==========",
     MODE_CONFIG[mode].characterInstruction,
@@ -961,11 +1011,6 @@ async function buildSystemPrompt(
     parts.push("6. 如果 Brief 中没有明确点名某个已有角色，则默认该角色不存在于本故事中")
   }
 
-  // 世界观铁律
-  parts.push(buildWorldViewSection(worldBible))
-  parts.push("")
-  parts.push(MODE_CONFIG[mode].worldViewConstraint)
-
   // 正史
   if (canonEvents.length > 0) {
     parts.push(buildCanonSection(canonEvents, mode))
@@ -1018,6 +1063,14 @@ async function buildSystemPrompt(
   if (forbiddenList) {
     parts.push("- 绝对禁止【严禁出场的角色】中列出的任何角色以任何形式出现")
   }
+  parts.push("" +
+    "【世界观自检清单】在输出每一段内容前，请在心中快速检查：\n" +
+    "1. 本段是否使用了未在设定中出现过的力量/科技？\n" +
+    "2. 角色的能力表现是否超出了设定中的能力边界？\n" +
+    "3. 地理环境、势力分布是否与设定一致？\n" +
+    "4. 如出现不一致，请立即修正后再输出。\n" +
+    "【强制规则】绝对禁止输出'世界观自检清单'本身，只需在心中完成检查并输出修正后的正文。"
+  )
 
   return { prompt: parts.join("\n"), ragCalls, warnings: warnings.length > 0 ? warnings : undefined }
 }
@@ -1229,10 +1282,10 @@ export const generateRouter = createRouter({
         ]
 
         const maxTokens = input.parameters.lengthTarget === "short"
-          ? 1500
-          : input.parameters.lengthTarget === "chapter"
           ? 4000
-          : 2000
+          : input.parameters.lengthTarget === "chapter"
+          ? 8000
+          : 12000
 
         setProgress(taskId, 3, "AI 正在创作中...")
         const fullContent = await generateContent(
@@ -1385,7 +1438,7 @@ export const generateRouter = createRouter({
         ]
 
         setProgress(taskId, 3, "AI 正在生成大纲...")
-        const rawOutline = await generateContent(messages, input.parameters.temperature, 2000)
+        const rawOutline = await generateContent(messages, input.parameters.temperature, 4000)
 
         setProgress(taskId, 4, "正在解析大纲...")
         const parsedOutline = await parseOutline(rawOutline, input.outlineType)
@@ -1507,7 +1560,7 @@ export const generateRouter = createRouter({
       const newContent = await generateContent(
         messages,
         ((work.parameters as Record<string, unknown>)?.temperature as number || 0.8) * 0.9,
-        4000
+        8000
       )
 
       const fullContent = (work.generatedContent || "") + "\n\n" + newContent
@@ -1578,7 +1631,7 @@ export const generateRouter = createRouter({
       const regenerated = await generateContent(
         messages,
         ((work.parameters as Record<string, unknown>)?.temperature as number || 0.8) * 1.1,
-        2000
+        4000
       )
 
       const newContent = (work.generatedContent || "").replace(input.originalText, regenerated)
@@ -1672,6 +1725,7 @@ export const generateRouter = createRouter({
                 hotkeyTropeIds: workParams.hotkeyTropeIds as number[] | undefined,
                 outlineSection,
                 previousContext,
+                worldBible: undefined,
               }
             )
 
