@@ -135,7 +135,7 @@ async function runAutoExtractLore(
 素材内容：
 ${content}`
 
-  const response = await chatCompletion({
+  const result = await chatCompletion({
     messages: [
       { role: "system", content: systemPrompt },
       { role: "user", content: userPrompt },
@@ -145,11 +145,11 @@ ${content}`
   })
 
   let parsed: unknown
-  const fixedJson = tryFixTruncatedJson(response)
+  const fixedJson = tryFixTruncatedJson(result.content)
   if (fixedJson) {
     parsed = JSON.parse(fixedJson)
   } else {
-    console.error("[autoExtractLore] JSON 修复失败，原始响应前2000字符:", response.slice(0, 2000))
+    console.error("[autoExtractLore] JSON 修复失败，原始响应前2000字符:", result.content.slice(0, 2000))
     throw new Error("AI 返回的内容无法解析为有效 JSON")
   }
 
@@ -883,7 +883,7 @@ export const materialRouter = createRouter({
 素材内容：
 ${content}`
 
-      const response = await chatCompletion({
+      const result = await chatCompletion({
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },
@@ -893,11 +893,11 @@ ${content}`
       })
 
       let parsed: unknown
-      const fixedJson = tryFixTruncatedJson(response)
+      const fixedJson = tryFixTruncatedJson(result.content)
       if (fixedJson) {
         parsed = JSON.parse(fixedJson)
       } else {
-        console.error("[extractLore] JSON 修复失败，原始响应前2000字符:", response.slice(0, 2000))
+        console.error("[extractLore] JSON 修复失败，原始响应前2000字符:", result.content.slice(0, 2000))
         throw new Error("AI 返回的内容无法解析为有效 JSON")
       }
 

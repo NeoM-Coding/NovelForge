@@ -194,7 +194,7 @@ ${combined}
   "narrativeHabits": "叙事习惯描述"
 }`
 
-        const response = await chatCompletion({
+        const result = await chatCompletion({
           messages: [{ role: "user", content: prompt }],
           temperature: 0.3,
           maxTokens: 2000,
@@ -204,8 +204,8 @@ ${combined}
         let profile: Record<string, unknown>
         try {
           // 尝试提取 JSON（AI 可能包裹在 markdown 代码块中）
-          const jsonMatch = response.match(/\{[\s\S]*\}/)
-          profile = JSON.parse(jsonMatch ? jsonMatch[0] : response)
+          const jsonMatch = result.content.match(/\{[\s\S]*\}/)
+          profile = JSON.parse(jsonMatch ? jsonMatch[0] : result.content)
         } catch {
           throw new Error("AI 返回的风格分析无法解析为有效 JSON")
         }
@@ -477,7 +477,7 @@ ${truncated}
   "timelineEvents": [{"order": 1, "description": "事件描述"}]
 }`
 
-        const response = await chatCompletion({
+        const result = await chatCompletion({
           messages: [
             { role: "system", content: systemPrompt },
             { role: "user", content: userPrompt },
@@ -486,7 +486,7 @@ ${truncated}
           maxTokens: 4000,
         })
 
-        let jsonText = response.trim()
+        let jsonText = result.content.trim()
         const codeBlockMatch = jsonText.match(/```(?:json)?\s*([\s\S]*?)```/)
         if (codeBlockMatch) {
           jsonText = codeBlockMatch[1].trim()
@@ -668,7 +668,7 @@ ${characterDescriptions}
   "timelineEvents": [{"order": 1, "description": "事件描述"}]
 `
 
-      const response = await chatCompletion({
+      const result = await chatCompletion({
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },
@@ -677,7 +677,7 @@ ${characterDescriptions}
         maxTokens: 4000,
       })
 
-      let jsonText = response.trim()
+      let jsonText = result.content.trim()
       const codeBlockMatch = jsonText.match(/```(?:json)?\s*([\s\S]*?)```/)
       if (codeBlockMatch) {
         jsonText = codeBlockMatch[1].trim()

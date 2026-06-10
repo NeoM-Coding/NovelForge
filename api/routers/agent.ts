@@ -487,7 +487,7 @@ export const agentRouter = createRouter({
         `{"vocabulary":["高频用词1"],"sentencePatterns":["句式特点1"],` +
         `"emotionalTone":"情感基调","dialogueStyle":"对话风格","narrativeHabits":"叙事习惯"}`
 
-      const response = await chatCompletion({
+      const result = await chatCompletion({
         messages: [{ role: "user", content: prompt }],
         temperature: 0.3,
         maxTokens: 2000,
@@ -495,8 +495,8 @@ export const agentRouter = createRouter({
 
       let profile: Record<string, unknown>
       try {
-        const jsonMatch = response.match(/\{[\s\S]*\}/)
-        profile = JSON.parse(jsonMatch ? jsonMatch[0] : response)
+        const jsonMatch = result.content.match(/\{[\s\S]*\}/)
+        profile = JSON.parse(jsonMatch ? jsonMatch[0] : result.content)
       } catch {
         return { success: false, error: "AI 返回的风格分析无法解析为有效 JSON" }
       }

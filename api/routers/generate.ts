@@ -105,7 +105,7 @@ async function generateSingleChapter(
     options.previousContext,
   )
 
-  const response = await chatCompletion({
+  const result = await chatCompletion({
     messages: [
       { role: "system", content: prompt },
       { role: "user", content: `请创作第 ${chapterNumber} 章《${chapterTitle}》。要求：${chapterBrief}` },
@@ -114,7 +114,7 @@ async function generateSingleChapter(
     maxTokens: params.lengthTarget === "short" ? 4000 : params.lengthTarget === "arc" ? 12000 : 8000,
   })
 
-  const content = sanitizeGeneratedContent(response)
+  const content = sanitizeGeneratedContent(result.content)
 
   // 世界观一致性检查
   if (options.worldBible) {
@@ -655,12 +655,12 @@ async function parseOutline(
 ${rawText.slice(0, 3000)}`
 
     try {
-      const parsed = await chatCompletion({
+      const result = await chatCompletion({
         messages: [{ role: "user", content: parsePrompt }],
         temperature: 0.1,
         maxTokens: 4000,
       })
-      const cleaned = parsed.trim().replace(/^```json\s*|\s*```$/g, "")
+      const cleaned = result.content.trim().replace(/^```json\s*|\s*```$/g, "")
       const json = JSON.parse(cleaned)
       return {
         overview: outlineType !== "scenes" ? json.overview || "" : undefined,
@@ -717,12 +717,12 @@ async function summarizeRagChunks(chunks: RagCall[]): Promise<string | null> {
 ${chunks.map((c, i) => `【片段 ${i + 1}】${c.content}`).join("\n\n")}`
 
   try {
-    const summary = await chatCompletion({
+    const result = await chatCompletion({
       messages: [{ role: "user", content: summaryPrompt }],
       temperature: 0.3,
       maxTokens: 2400,
     })
-    const trimmed = summary.trim()
+    const trimmed = result.content.trim()
     // 如果摘要结果过短，视为失败，回退到原始 chunks 拼接
     if (trimmed.length < 50) return null
     return trimmed
@@ -801,8 +801,8 @@ ${generatedText.slice(0, 3000)}
 如果片段完全遵守世界观，返回 compliant: true 和空 issues 数组。`
 
   try {
-    const response = await chatCompletion({ messages: [{ role: "user", content: prompt }], temperature: 0.2, maxTokens: 1000 })
-    const cleaned = response.replace(/^```[a-z]*\s*|\s*```$/gim, "").trim()
+    const result = await chatCompletion({ messages: [{ role: "user", content: prompt }], temperature: 0.2, maxTokens: 1000 })
+    const cleaned = result.content.replace(/^```[a-z]*\s*|\s*```$/gim, "").trim()
     const json = JSON.parse(cleaned)
     return {
       compliant: Boolean(json.compliant),
@@ -1214,13 +1214,13 @@ ${parts.join("\n")}
 只输出发现的违规，每条一行。没有违规则只输出一个字：通过。`
 
   try {
-    const response = await chatCompletion({
+    const result = await chatCompletion({
       messages: [{ role: "user", content: critiquePrompt }],
       temperature: 0.2,
       maxTokens: 600,
     })
 
-    const trimmed = response.trim()
+    const trimmed = result.content.trim()
     if (trimmed === "通过" || trimmed.length < 5) {
       return { passed: true, issues: [] }
     }
@@ -1375,7 +1375,7 @@ export const generateRouter = createRouter({
 创作方向：${input.brief.slice(0, 200)}
 
 内容摘要：${fullContent.slice(0, 500)}`
-          autoTitle = await chatCompletion({
+          const titleResult = await chatCompletion({
             messages: [
               { role: "system", content: "你是一个专业的小说标题生成助手。你的唯一任务是返回一个纯文本标题，不添加任何解释、前缀或包裹符号。" },
               { role: "user", content: titlePrompt },
@@ -1384,7 +1384,7 @@ export const generateRouter = createRouter({
             maxTokens: 60,
           })
           // 清理：去掉各种引号、书名号和常见前缀后缀
-          autoTitle = autoTitle
+          autoTitle = titleResult.content
             .trim()
             .replace(/^(标题[:：]?\s*|小说标题[:：]?\s*|书名[:：]?\s*)/i, "")
             .replace(/[""''""《》「」『』]/g, "")
@@ -2174,7 +2174,7 @@ ${reviewText}
   "suggestions": ["改进建议1", "改进建议2"]
 }`
 
-      const rawReview = await chatCompletion({
+      const reviewResult = await chatCompletion({
         messages: [{ role: "user", content: reviewPrompt }],
         temperature: 0.3,
         maxTokens: 4000,
@@ -2183,11 +2183,11 @@ ${reviewText}
       // 清洗并解析 JSON
       let reviewData: unknown
       try {
-        const cleaned = rawReview.replace(/^```[a-z]*\s*|\s*```$/gim, "").trim()
+        const cleaned = reviewResult.content.replace(/^```[a-z]*\s*|\s*```$/gim, "").trim()
         reviewData = JSON.parse(cleaned)
       } catch {
         // 如果 JSON 解析失败，尝试从文本中提取 JSON
-        const jsonMatch = rawReview.match(/\{[\s\S]*\}/)
+        const jsonMatch = reviewResult.content.match(/\{[\s\S]*\}/)
         if (jsonMatch) {
           try {
             reviewData = JSON.parse(jsonMatch[0])
@@ -2219,7 +2219,7 @@ ${reviewText}
           : [],
         strengths: Array.isArray(parsed?.strengths) ? (parsed?.strengths as unknown[]).map(String) : [],
         suggestions: Array.isArray(parsed?.suggestions) ? (parsed?.suggestions as unknown[]).map(String) : [],
-        rawText: rawReview.slice(0, 2000), // 保留原始文本用于调试
+        rawText: reviewResult.content.slice(0, 2000), // 保留原始文本用于调试
       }
     }),
 
@@ -2284,7 +2284,7 @@ ${searchResults.length > 0 ? `【网络检索参考】\n${searchResults.map((r, 
   "warnings": ["需要注意的雷点或常见陷阱"]
 }`
 
-      const rawResponse = await chatCompletion({
+      const inspireResult = await chatCompletion({
         messages: [{ role: "user", content: prompt }],
         temperature: 0.9,
         maxTokens: 4000,
@@ -2293,10 +2293,10 @@ ${searchResults.length > 0 ? `【网络检索参考】\n${searchResults.map((r, 
       // 解析 JSON
       let parsed: Record<string, unknown> | null = null
       try {
-        const cleaned = rawResponse.replace(/^```[a-z]*\s*|\s*```$/gim, "").trim()
+        const cleaned = inspireResult.content.replace(/^```[a-z]*\s*|\s*```$/gim, "").trim()
         parsed = JSON.parse(cleaned)
       } catch {
-        const jsonMatch = rawResponse.match(/\{[\s\S]*\}/)
+        const jsonMatch = inspireResult.content.match(/\{[\s\S]*\}/)
         if (jsonMatch) {
           try {
             parsed = JSON.parse(jsonMatch[0])
@@ -2333,7 +2333,7 @@ ${searchResults.length > 0 ? `【网络检索参考】\n${searchResults.map((r, 
         trends,
         warnings,
         searchResults: searchResults.map(r => ({ title: r.title, snippet: r.snippet })),
-        rawText: rawResponse.slice(0, 2000),
+        rawText: inspireResult.content.slice(0, 2000),
       }
     }),
 })

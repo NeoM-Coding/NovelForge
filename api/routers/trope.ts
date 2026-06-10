@@ -411,7 +411,7 @@ async function runExtractionTask(
       const { system, user } = buildBatchPrompt(chunks[i], i, chunks.length)
 
       try {
-        const response = await chatCompletion({
+        const result = await chatCompletion({
           messages: [
             { role: "system", content: system },
             { role: "user", content: user },
@@ -419,8 +419,8 @@ async function runExtractionTask(
           temperature: 0.4,
           maxTokens: 4000,
         })
-        console.log(`[TropeExtract] Batch ${i + 1} raw response length:`, response.length)
-        const batchResult = parseTropeJson(response)
+        console.log(`[TropeExtract] Batch ${i + 1} raw response length:`, result.content.length)
+        const batchResult = parseTropeJson(result.content)
         console.log(`[TropeExtract] Batch ${i + 1} parsed tropes:`, batchResult.length)
         allBatchTropes.push(...batchResult)
       } catch (err) {
@@ -456,7 +456,7 @@ async function runExtractionTask(
         buildMergePrompt(truncatedTropesJson)
 
       try {
-        const mergeResponse = await chatCompletion({
+        const mergeResult = await chatCompletion({
           messages: [
             { role: "system", content: mergeSystem },
             { role: "user", content: mergeUser },
@@ -464,8 +464,8 @@ async function runExtractionTask(
           temperature: 0.3,
           maxTokens: 4000,
         })
-        console.log(`[TropeExtract] Merge raw response length:`, mergeResponse.length)
-        finalTropes = parseTropeJson(mergeResponse)
+        console.log(`[TropeExtract] Merge raw response length:`, mergeResult.content.length)
+        finalTropes = parseTropeJson(mergeResult.content)
         console.log(`[TropeExtract] Merge parsed tropes:`, finalTropes.length)
       } catch (err) {
         console.error("[TropeExtract] Merge failed, using batch results:", err)

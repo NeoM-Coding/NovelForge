@@ -60,7 +60,7 @@ ${preview}
     })
 
     // 3. 生成 embedding
-    const embedding = await getEmbedding(hypotheticalDoc.trim())
+    const embedding = await getEmbedding(hypotheticalDoc.content.trim())
 
     // 4. 写入缓存
     hydeCache.set(cacheKey, embedding)
@@ -461,7 +461,7 @@ ${limited.map((c, i) => `[${i}] ${c.content.slice(0, 200)}`).join("\n\n")}
 请返回 JSON 数组：[[0, 8], [1, 3], ...] 表示 [素材编号, 分数]。只输出 JSON，不要解释。`
 
   try {
-    const response = await chatCompletion({
+    const result = await chatCompletion({
       messages: [{ role: "user", content: prompt }],
       temperature: 0.1,
       maxTokens: 200,
@@ -469,7 +469,7 @@ ${limited.map((c, i) => `[${i}] ${c.content.slice(0, 200)}`).join("\n\n")}
 
     let scores: number[] = []
     try {
-      const parsed = JSON.parse(response.trim()) as number[][]
+      const parsed = JSON.parse(result.content.trim()) as number[][]
       scores = limited.map((_, i) => {
         const entry = parsed.find((p: number[]) => p[0] === i)
         return entry ? entry[1] : 5

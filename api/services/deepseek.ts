@@ -21,6 +21,17 @@ export interface ChatOptions {
   model?: string
 }
 
+export interface TokenUsage {
+  promptTokens: number
+  completionTokens: number
+  totalTokens: number
+}
+
+export interface ChatResult {
+  content: string
+  usage?: TokenUsage
+}
+
 interface RetryConfig {
   maxRetries?: number
   baseDelayMs?: number
@@ -175,7 +186,7 @@ export async function* streamChat(options: ChatOptions) {
   }
 }
 
-export async function chatCompletion(options: ChatOptions): Promise<string> {
+export async function chatCompletion(options: ChatOptions): Promise<ChatResult> {
   const response = await fetchWithRetry(`${BASE_URL}/chat/completions`, {
     method: "POST",
     headers: {
@@ -195,8 +206,21 @@ export async function chatCompletion(options: ChatOptions): Promise<string> {
     throw new Error(`DeepSeek API error: ${response.status}`)
   }
 
-  const data = await response.json() as { choices?: Array<{ message?: { content?: string } }> }
-  return data.choices?.[0]?.message?.content || ""
+  const data = await response.json() as {
+    choices?: Array<{ message?: { content?: string } }>
+    usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number }
+  }
+
+  const content = data.choices?.[0]?.message?.content || ""
+  const usage: TokenUsage | undefined = data.usage
+    ? {
+        promptTokens: data.usage.prompt_tokens,
+        completionTokens: data.usage.completion_tokens,
+        totalTokens: data.usage.total_tokens,
+      }
+    : undefined
+
+  return { content, usage }
 }
 
 export async function getEmbedding(text: string): Promise<number[]> {
