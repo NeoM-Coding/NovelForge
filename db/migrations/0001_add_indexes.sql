@@ -32,3 +32,6 @@ CREATE INDEX IF NOT EXISTS idx_translation_memory_novel_id ON translation_memory
 -- pgvector HNSW 索引（translation_memory 向量相似性搜索）
 CREATE INDEX IF NOT EXISTS idx_translation_memory_embedding_hnsw
   ON translation_memory USING hnsw (embedding vector_cosine_ops);
+
+-- pg_trgm GIN 索引（加速中文模糊搜索）
+CREATE INDEX IF NOT EXISTS idx_vector_chunks_trgm ON vector_chunks USING gin (content gin_trgm_ops);

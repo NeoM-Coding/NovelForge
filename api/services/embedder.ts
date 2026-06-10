@@ -139,7 +139,8 @@ export async function searchSimilar(
   const limit = options?.limit || 5
   const embeddingJson = JSON.stringify(embedding)
 
-  const results = await db.execute(sql`
+  // 1. 向量搜索
+  const vectorResults = await db.execute(sql`
     SELECT id, content, source_type, 1 - (embedding <=> ${embeddingJson}) as similarity,
       metadata
     FROM vector_chunks
@@ -149,9 +150,53 @@ export async function searchSimilar(
     LIMIT ${limit}
   `)
 
-  const rows = Array.isArray(results) ? results : []
+  // 2. pg_trgm 模糊搜索（中文全文搜索的主要替代方案）
+  let trgmResults: Array<Record<string, unknown>> = []
+  try {
+    const trgmQuery = query.slice(0, 100)
+    const trgm = await db.execute(sql`
+      SELECT id, content, source_type, metadata,
+        similarity(content, ${trgmQuery}) as similarity
+      FROM vector_chunks
+      WHERE content % ${trgmQuery}
+        AND (${options?.seriesId ?? null}::int IS NULL OR series_id = ${options?.seriesId ?? null})
+        AND (${options?.novelId ?? null}::int IS NULL OR novel_id = ${options?.novelId ?? null})
+      ORDER BY similarity(content, ${trgmQuery}) DESC
+      LIMIT ${Math.ceil(limit * 1.5)}
+    `)
+    trgmResults = Array.isArray(trgm) ? trgm : []
+  } catch {
+    // pg_trgm 可选，失败时忽略
+  }
 
-  const mapped = rows.map((row: Record<string, unknown>) => {
+  // 3. 合并结果（去重）
+  const seenIds = new Set<number>()
+  const merged: Array<Record<string, unknown> & { _similarity: number }> = []
+
+  // 先加入向量搜索结果
+  const vectorRows = Array.isArray(vectorResults) ? vectorResults : []
+  for (const row of vectorRows) {
+    const id = row.id ? Number(row.id) : undefined
+    if (id !== undefined) seenIds.add(id)
+    merged.push({ ...row, _similarity: Number(row.similarity) })
+  }
+
+  // 加入 pg_trgm 结果（去重，提升权重补偿 simple tsvector 失效）
+  for (const row of trgmResults) {
+    const id = row.id ? Number(row.id) : undefined
+    if (id === undefined || seenIds.has(id)) continue
+
+    const sim = Number(row.similarity) || 0
+    // 提升 20% 权重，补偿 tsvector 对中文无效
+    const boostedSim = Math.min(sim * 1.2, 1.0)
+    if (boostedSim > 0.15) {
+      merged.push({ ...row, _similarity: boostedSim })
+      seenIds.add(id)
+    }
+  }
+
+  // 映射为 SearchResult
+  const mapped = merged.map((row) => {
     const metadata = (row.metadata as Record<string, unknown>) || {}
     const content = String(row.content)
     const contextBefore = metadata.contextBefore ? String(metadata.contextBefore) : undefined
@@ -167,7 +212,7 @@ export async function searchSimilar(
       id: row.id ? Number(row.id) : undefined,
       content,
       enrichedContent: enrichedParts.join("\n"),
-      similarity: Number(row.similarity),
+      similarity: row._similarity,
       sourceType: String(row.source_type),
       sourceTitle: metadata.sourceTitle ? String(metadata.sourceTitle) : undefined,
       chapterNumber: metadata.chapterNumber ? Number(metadata.chapterNumber) : undefined,
