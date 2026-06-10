@@ -238,8 +238,7 @@ export function useStudioState() {
       alternate_universe: 1.0,
     }
     setParams(p => ({ ...p, temperature: tempMap[p.writingMode] }))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [params.writingMode])
+  }, [params.writingMode, characters, setSelectedCharacterIds, setParams])
 
   // 系列切换时重置素材选择
   useEffect(() => {
@@ -866,9 +865,8 @@ export function useStudioState() {
   }, [worksList])
 
   return {
-    // URL params & tRPC utils
+    // URL params
     workId,
-    utils,
 
     // tRPC queries
     seriesList,
@@ -967,7 +965,6 @@ export function useStudioState() {
     setShowDraftBanner,
     draftInfo,
     setDraftInfo,
-    lastSavedHashRef,
 
     // 风格样本
     showStyleSampleModal,
@@ -990,7 +987,6 @@ export function useStudioState() {
     // 生成进度
     genProgress,
     setGenProgress,
-    progressIntervalRef,
 
     // 批量生成
     batchJobId,
