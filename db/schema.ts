@@ -194,6 +194,7 @@ export const generationJobs = pgTable("generation_jobs", {
   result: jsonb("result"),
   errorLog: text("error_log"),
   metadata: jsonb("metadata"),
+  tokenUsage: jsonb("token_usage"), // ← 新增：{ promptTokens: number, completionTokens: number }
   createdAt: timestamp("created_at").notNull().defaultNow(),
 })
 
