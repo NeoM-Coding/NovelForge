@@ -195,6 +195,19 @@ export default function Studio() {
   const [selectedTropeIds, setSelectedTropeIds] = useState<number[]>([])
   const [warnings, setWarnings] = useState<string[]>([])
 
+  // AI Review 相关状态
+  const [reviewResult, setReviewResult] = useState<
+    | {
+        overallScore: number
+        scores: { worldview: number; character: number; writing: number; plot: number }
+        findings: Array<{ category: string; severity: string; location: string; description: string }>
+        strengths: string[]
+        suggestions: string[]
+      }
+    | null
+  >(null)
+  const [showReviewPanel, setShowReviewPanel] = useState(false)
+
   // 大纲相关状态
   const [useOutlineMode, setUseOutlineMode] = useState(false)
   const [outlineType, setOutlineType] = useState<"overview" | "scenes" | "both">("both")
@@ -292,6 +305,7 @@ export default function Studio() {
 
   const batchMutation = trpc.generate.batch.useMutation()
   const exportMutation = trpc.generate.export.useMutation()
+  const reviewMutation = trpc.generate.review.useMutation()
 
   const [batchJobId, setBatchJobId] = useState(0)
   const [isBatchGenerating, setIsBatchGenerating] = useState(false)
@@ -477,6 +491,7 @@ export default function Studio() {
 
       // Esc：关闭弹窗（按优先级）
       if (e.key === "Escape") {
+        if (showReviewPanel) { setShowReviewPanel(false); return }
         if (showRagPanel) { setShowRagPanel(false); return }
         if (showFeedbackDetail) { setShowFeedbackDetail(false); return }
         if (showStyleSampleModal) { setShowStyleSampleModal(false); return }
@@ -508,7 +523,7 @@ export default function Studio() {
     }
     window.addEventListener("keydown", handleKeyDown)
     return () => window.removeEventListener("keydown", handleKeyDown)
-  }, [isGenerating, selectedSeriesId, brief, generatedWorkId, showRagPanel, showFeedbackDetail, showStyleSampleModal, useOutlineMode, outlineScenes.length])
+  }, [isGenerating, selectedSeriesId, brief, generatedWorkId, showReviewPanel, showRagPanel, showFeedbackDetail, showStyleSampleModal, useOutlineMode, outlineScenes.length])
 
   // 处理生成
   const handleGenerate = async () => {
@@ -834,6 +849,21 @@ export default function Studio() {
     }
   }
 
+  // AI 审阅
+  const handleReview = async (focus: "full" | "worldview" | "character" | "writing" | "plot" = "full") => {
+    if (!generatedWorkId) {
+      toast.error("没有可审阅的作品")
+      return
+    }
+    try {
+      const result = await reviewMutation.mutateAsync({ workId: generatedWorkId, focus })
+      setReviewResult(result)
+      setShowReviewPanel(true)
+    } catch (err) {
+      toast.error(String(err))
+    }
+  }
+
   // 续写
   const handleContinue = async () => {
     if (!generatedWorkId || isGenerating) return
@@ -1012,6 +1042,14 @@ export default function Studio() {
               >
                 <Sparkles className="w-3.5 h-3.5" />
                 保存为风格样本
+              </button>
+              <button
+                onClick={() => handleReview("full")}
+                disabled={reviewMutation.isPending || !generatedWorkId || (!content && !listChaptersQuery.data?.length)}
+                className="flex items-center gap-2 px-4 py-1.5 rounded-full bg-cyan-500/20 hover:bg-cyan-500/30 disabled:opacity-30 text-cyan-400 text-sm transition-colors"
+              >
+                <Shield className="w-3.5 h-3.5" />
+                {reviewMutation.isPending ? "审阅中..." : "AI 审阅"}
               </button>
               <div className="flex items-center gap-2">
                 <button
@@ -2117,6 +2155,106 @@ export default function Studio() {
               >
                 {saveAsStyleSampleMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : "确认保存"}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* AI Review 结果面板 */}
+      {showReviewPanel && reviewResult && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+          <div className="w-full max-w-2xl max-h-[85vh] flex flex-col rounded-2xl bg-[#1F2937] border border-white/10">
+            {/* 头部 */}
+            <div className="flex items-center justify-between px-6 pt-6 pb-4 shrink-0">
+              <div className="flex items-center gap-2">
+                <Shield className="w-5 h-5 text-cyan-400" />
+                <h3 className="font-serif text-lg font-semibold">AI 审阅报告</h3>
+                <span className={`ml-2 px-2 py-0.5 rounded-full text-xs font-bold ${
+                  reviewResult.overallScore >= 8 ? "bg-green-500/20 text-green-400" :
+                  reviewResult.overallScore >= 5 ? "bg-amber-500/20 text-amber-400" :
+                  "bg-red-500/20 text-red-400"
+                }`}>
+                  总分 {reviewResult.overallScore}/10
+                </span>
+              </div>
+              <button onClick={() => setShowReviewPanel(false)} className="p-1.5 rounded-lg hover:bg-white/10 transition-colors"><X className="w-4 h-4" /></button>
+            </div>
+            {/* 内容 */}
+            <div className="flex-1 overflow-y-auto px-6 pb-6 space-y-5">
+              {/* 分项得分 */}
+              <div className="grid grid-cols-4 gap-3">
+                {[
+                  { key: "worldview", label: "世界观" },
+                  { key: "character", label: "角色" },
+                  { key: "writing", label: "文笔" },
+                  { key: "plot", label: "情节" },
+                ].map(({ key, label }) => {
+                  const score = reviewResult.scores[key as keyof typeof reviewResult.scores]
+                  return (
+                    <div key={key} className="p-3 rounded-xl bg-white/5 border border-white/10 text-center">
+                      <div className={`text-xl font-bold ${
+                        score >= 8 ? "text-green-400" : score >= 5 ? "text-amber-400" : "text-red-400"
+                      }`}>{score}</div>
+                      <div className="text-[10px] text-white/50 font-mono mt-1">{label}</div>
+                    </div>
+                  )
+                })}
+              </div>
+
+              {/* 优点 */}
+              {reviewResult.strengths.length > 0 && (
+                <div>
+                  <h4 className="text-sm font-medium text-white/70 mb-2 flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-amber-400" /> 亮点
+                  </h4>
+                  <ul className="space-y-1.5">
+                    {reviewResult.strengths.map((s, i) => (
+                      <li key={i} className="text-sm text-white/60 pl-4 relative before:content-['•'] before:absolute before:left-0 before:text-amber-400">{s}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* 问题发现 */}
+              {reviewResult.findings.length > 0 && (
+                <div>
+                  <h4 className="text-sm font-medium text-white/70 mb-2 flex items-center gap-1.5">
+                    <AlertCircle className="w-3.5 h-3.5 text-red-400" /> 发现问题 ({reviewResult.findings.length})
+                  </h4>
+                  <div className="space-y-2">
+                    {reviewResult.findings.map((f, i) => (
+                      <div key={i} className="p-3 rounded-xl bg-white/5 border border-white/10">
+                        <div className="flex items-center gap-2 mb-1 flex-wrap">
+                          <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
+                            f.severity === "critical" ? "bg-red-500/20 text-red-400" :
+                            f.severity === "warning" ? "bg-amber-500/20 text-amber-400" :
+                            "bg-blue-500/20 text-blue-400"
+                          }`}>
+                            {f.severity === "critical" ? "严重" : f.severity === "warning" ? "警告" : "建议"}
+                          </span>
+                          <span className="text-[10px] text-white/40 font-mono">{f.category}</span>
+                          {f.location && <span className="text-[10px] text-white/30 font-mono ml-auto">{f.location}</span>}
+                        </div>
+                        <p className="text-sm text-white/70">{f.description}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* 改进建议 */}
+              {reviewResult.suggestions.length > 0 && (
+                <div>
+                  <h4 className="text-sm font-medium text-white/70 mb-2 flex items-center gap-1.5">
+                    <PenTool className="w-3.5 h-3.5 text-cyan-400" /> 改进建议
+                  </h4>
+                  <ul className="space-y-1.5">
+                    {reviewResult.suggestions.map((s, i) => (
+                      <li key={i} className="text-sm text-white/60 pl-4 relative before:content-['→'] before:absolute before:left-0 before:text-cyan-400">{s}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
           </div>
         </div>

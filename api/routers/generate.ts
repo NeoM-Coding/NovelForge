@@ -2059,4 +2059,131 @@ export const generateRouter = createRouter({
 
       return { novelId: novel.id }
     }),
+
+  // 对已完成作品进行 AI Review
+  review: publicQuery
+    .input(z.object({
+      workId: z.number(),
+      focus: z.enum(["full", "worldview", "character", "writing", "plot"]).default("full"),
+    }))
+    .mutation(async ({ input }) => {
+      const db = getDb()
+
+      const [work] = await db
+        .select()
+        .from(fanFictionWorks)
+        .where(eq(fanFictionWorks.id, input.workId))
+      if (!work) throw new Error("作品不存在")
+
+      // 读取完整内容（多章节优先）
+      const chapterRows = await db
+        .select()
+        .from(fanFictionChapters)
+        .where(eq(fanFictionChapters.workId, input.workId))
+        .orderBy(asc(fanFictionChapters.chapterNumber))
+
+      let fullText: string
+      if (chapterRows.length > 0) {
+        fullText = chapterRows.map(ch => `## ${ch.title || "第" + ch.chapterNumber + "章"}\n\n${ch.content}`).join("\n\n")
+      } else {
+        fullText = work.generatedContent || ""
+      }
+      if (!fullText || fullText.length < 50) {
+        throw new Error("作品内容过短，无法审阅")
+      }
+
+      // 截断至 12000 字以内以控制 token
+      const reviewText = fullText.slice(0, 12000)
+
+      // 获取系列设定
+      const seriesChars = work.seriesId
+        ? await db.select().from(characterCards).where(eq(characterCards.seriesId, work.seriesId))
+        : []
+      const [wb] = work.seriesId
+        ? await db.select().from(worldBibles).where(eq(worldBibles.seriesId, work.seriesId))
+        : [undefined]
+
+      const focusMap: Record<string, string> = {
+        full: "世界观一致性、角色OOC、文笔质量、情节连贯性",
+        worldview: "世界观一致性",
+        character: "角色OOC（言行是否符合设定）",
+        writing: "文笔质量（叙事流畅度、描写生动性、语言节奏）",
+        plot: "情节连贯性（逻辑合理性、起承转合、伏笔回收）",
+      }
+
+      const reviewPrompt = `你是一位资深小说编辑，请对以下作品进行专业审阅。
+
+【审阅重点】${focusMap[input.focus] || focusMap.full}
+
+      ${seriesChars.length > 0 ? `【角色设定】\n${seriesChars.map(c => { const traits = (c.personalityTraits as string[] | null)?.join(", ") || ""; const taboos = (c.taboos as string[] | null)?.join(", ") || "无"; return `- ${c.name}：${traits}；核心动机：${c.coreMotivations || "无"}；禁忌：${taboos}`; }).join("\n")}` : ""}
+
+      ${wb ? `【世界观设定】\n${buildWorldViewSection(wb)}` : ""}
+
+【作品内容】
+${reviewText}
+
+请严格按以下 JSON 格式返回（不要包含 markdown 代码块标记）：
+{
+  "overallScore": 1-10,
+  "scores": {
+    "worldview": 1-10,
+    "character": 1-10,
+    "writing": 1-10,
+    "plot": 1-10
+  },
+  "findings": [
+    { "category": "世界观/角色/文笔/情节", "severity": "critical/warning/suggestion", "location": "大概位置或章节", "description": "具体问题描述" }
+  ],
+  "strengths": ["优点1", "优点2"],
+  "suggestions": ["改进建议1", "改进建议2"]
+}`
+
+      const rawReview = await chatCompletion({
+        messages: [{ role: "user", content: reviewPrompt }],
+        temperature: 0.3,
+        maxTokens: 4000,
+      })
+
+      // 清洗并解析 JSON
+      let reviewData: unknown
+      try {
+        const cleaned = rawReview.replace(/^```[a-z]*\s*|\s*```$/gim, "").trim()
+        reviewData = JSON.parse(cleaned)
+      } catch {
+        // 如果 JSON 解析失败，尝试从文本中提取 JSON
+        const jsonMatch = rawReview.match(/\{[\s\S]*\}/)
+        if (jsonMatch) {
+          try {
+            reviewData = JSON.parse(jsonMatch[0])
+          } catch {
+            reviewData = null
+          }
+        }
+      }
+
+      // 标准化返回结构
+      const safe = (val: unknown, fallback: unknown) => (val !== undefined && val !== null ? val : fallback)
+      const parsed = reviewData as Record<string, unknown> | null
+
+      return {
+        overallScore: Number(safe(parsed?.overallScore, 0)) || 0,
+        scores: {
+          worldview: Number(safe((parsed?.scores as Record<string, unknown>)?.worldview, 0)) || 0,
+          character: Number(safe((parsed?.scores as Record<string, unknown>)?.character, 0)) || 0,
+          writing: Number(safe((parsed?.scores as Record<string, unknown>)?.writing, 0)) || 0,
+          plot: Number(safe((parsed?.scores as Record<string, unknown>)?.plot, 0)) || 0,
+        },
+        findings: Array.isArray(parsed?.findings)
+          ? (parsed?.findings as Array<Record<string, unknown>>).map(f => ({
+              category: String(f?.category || "其他"),
+              severity: ["critical", "warning", "suggestion"].includes(String(f?.severity)) ? String(f?.severity) : "suggestion",
+              location: String(f?.location || ""),
+              description: String(f?.description || ""),
+            }))
+          : [],
+        strengths: Array.isArray(parsed?.strengths) ? (parsed?.strengths as unknown[]).map(String) : [],
+        suggestions: Array.isArray(parsed?.suggestions) ? (parsed?.suggestions as unknown[]).map(String) : [],
+        rawText: rawReview.slice(0, 2000), // 保留原始文本用于调试
+      }
+    }),
 })
