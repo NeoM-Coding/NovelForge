@@ -19,6 +19,7 @@ const WRITING_MODES = [
 interface GenerationProgress {
   step: number
   message: string
+  detail?: string
   completed: boolean
   result?: { workId: number; title: string }
   error?: string
@@ -28,7 +29,13 @@ const generationProgress = new Map<string, GenerationProgress>()
 function setProgress(taskId: string, step: number, message: string) {
   generationProgress.set(taskId, { step, message, completed: false })
 }
-function completeProgress(taskId: string, result: { workId: number; title: string }, finalStep = 4) {
+function updateDetail(taskId: string, detail: string) {
+  const existing = generationProgress.get(taskId)
+  if (existing) {
+    generationProgress.set(taskId, { ...existing, detail })
+  }
+}
+function completeProgress(taskId: string, result: { workId: number; title: string }, finalStep = 6) {
   generationProgress.set(taskId, { step: finalStep, message: "创作完成", completed: true, result })
 }
 function failProgress(taskId: string, error: string) {
@@ -1198,13 +1205,29 @@ ${parts.join("\n")}
 async function generateContent(
   messages: Array<{ role: "system" | "user"; content: string }>,
   temperature: number,
-  maxTokens: number
+  maxTokens: number,
+  taskId?: string
 ): Promise<string> {
   const stream = streamChat({ messages, temperature, maxTokens })
   let fullContent = ""
+  let chunkCount = 0
+  const startTime = Date.now()
+
   for await (const chunk of stream) {
     fullContent += chunk
+    chunkCount++
+
+    if (taskId && chunkCount % 15 === 0) {
+      const elapsed = Math.round((Date.now() - startTime) / 1000)
+      updateDetail(taskId, `AI 正在创作中…（已生成约 ${fullContent.length} 字，用时 ${elapsed} 秒）`)
+    }
   }
+
+  if (taskId) {
+    const elapsed = Math.round((Date.now() - startTime) / 1000)
+    updateDetail(taskId, `AI 创作完成（共 ${fullContent.length} 字，用时 ${elapsed} 秒）`)
+  }
+
   return fullContent
 }
 
@@ -1287,14 +1310,17 @@ export const generateRouter = createRouter({
           ? 8000
           : 12000
 
-        setProgress(taskId, 3, "AI 正在创作中...")
+        setProgress(taskId, 3, "正在构建生成上下文...")
+        setProgress(taskId, 4, "AI 正在创作中...")
         const fullContent = await generateContent(
           messages,
           input.parameters.temperature,
-          maxTokens
+          maxTokens,
+          taskId
         )
 
-        setProgress(taskId, 4, "正在保存作品...")
+        setProgress(taskId, 5, "正在后处理与校验...")
+        setProgress(taskId, 6, "正在保存作品...")
 
         // 若用户未提供标题，自动根据 brief 与生成内容提炼标题
 
@@ -1489,8 +1515,8 @@ export const generateRouter = createRouter({
     .input(z.object({ taskId: z.string() }))
     .query(({ input }) => {
       const p = generationProgress.get(input.taskId)
-      if (!p) return { step: 0, message: "等待开始...", completed: false } as const
-      return { step: p.step, message: p.message, completed: p.completed, result: p.result, error: p.error } as const
+      if (!p) return { step: 0, message: "等待开始...", detail: undefined, completed: false } as const
+      return { step: p.step, message: p.message, detail: p.detail, completed: p.completed, result: p.result, error: p.error } as const
     }),
 
   continue: publicQuery

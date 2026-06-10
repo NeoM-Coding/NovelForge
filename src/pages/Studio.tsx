@@ -77,8 +77,10 @@ const TONE_OPTIONS = [
 const DEFAULT_STEPS = [
   { step: 1, label: "检索素材" },
   { step: 2, label: "组装指令" },
-  { step: 3, label: "AI创作中" },
-  { step: 4, label: "保存作品" },
+  { step: 3, label: "构建上下文" },
+  { step: 4, label: "AI创作中" },
+  { step: 5, label: "后处理" },
+  { step: 6, label: "保存作品" },
 ]
 
 const OUTLINE_STEPS = [
@@ -89,11 +91,14 @@ const OUTLINE_STEPS = [
   { step: 5, label: "保存" },
 ]
 
-function GenerationStepper({ progress, steps = DEFAULT_STEPS }: { progress: { step: number; message: string; completed?: boolean }; steps?: Array<{ step: number; label: string }> }) {
+function GenerationStepper({ progress, steps = DEFAULT_STEPS }: { progress: { step: number; message: string; detail?: string; completed?: boolean }; steps?: Array<{ step: number; label: string }> }) {
   const currentStep = progress.step
   return (
     <div className="mt-4 p-3 rounded-xl bg-white/5 border border-white/10">
       <p className="text-xs font-mono text-white/50 mb-2 text-center">{progress.message}</p>
+      {progress.detail && (
+        <p className="text-xs text-emerald-400/80 mb-2 text-center animate-pulse">{progress.detail}</p>
+      )}
       <div className="flex items-center justify-between">
         {steps.map((s, i) => {
           const isDone = currentStep > s.step || (progress.completed && currentStep >= s.step)
@@ -258,7 +263,7 @@ export default function Studio() {
   const [regenBrief, setRegenBrief] = useState("")
 
   // 生成进度可视化
-  const [genProgress, setGenProgress] = useState<{ step: number; message: string; completed?: boolean } | null>(null)
+  const [genProgress, setGenProgress] = useState<{ step: number; message: string; detail?: string; completed?: boolean } | null>(null)
   const progressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   // 生成 mutation
@@ -560,7 +565,7 @@ export default function Studio() {
       try {
         const p = await utils.client.generate.progress.query({ taskId })
         if (p) {
-          setGenProgress({ step: p.step, message: p.message, completed: p.completed })
+          setGenProgress({ step: p.step, message: p.message, detail: p.detail, completed: p.completed })
           if (p.completed && progressIntervalRef.current) {
             clearInterval(progressIntervalRef.current)
             progressIntervalRef.current = null
@@ -632,7 +637,7 @@ export default function Studio() {
       try {
         const p = await utils.client.generate.progress.query({ taskId })
         if (p) {
-          setGenProgress({ step: p.step, message: p.message, completed: p.completed })
+          setGenProgress({ step: p.step, message: p.message, detail: p.detail, completed: p.completed })
           if (p.completed && progressIntervalRef.current) {
             clearInterval(progressIntervalRef.current)
             progressIntervalRef.current = null
