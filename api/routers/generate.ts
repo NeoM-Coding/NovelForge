@@ -1,11 +1,11 @@
 import { z } from "zod"
 import { createRouter, publicQuery } from "../middleware"
 import { getDb } from "../queries/connection"
-import { characterCards, worldBibles, seriesCanon, fanFictionWorks, plotTropes, novels, chapters, ragFeedback } from "@db/schema"
+import { characterCards, worldBibles, seriesCanon, fanFictionWorks, fanFictionChapters, plotTropes, novels, chapters, ragFeedback, generationJobs } from "@db/schema"
 import { eq, asc, desc, sql } from "drizzle-orm"
 import { streamChat, chatCompletion } from "../services/deepseek"
 import { searchSimilar, getEmbeddingWithCache } from "../services/embedder"
-import { outlineSchema, type Outline } from "@contracts/schemas"
+import { outlineSchema, type Outline, batchGenerationSchema, exportWorkSchema } from "@contracts/schemas"
 
 const WRITING_MODES = [
   "canon_continuation",
@@ -33,6 +33,95 @@ function completeProgress(taskId: string, result: { workId: number; title: strin
 }
 function failProgress(taskId: string, error: string) {
   generationProgress.set(taskId, { step: -1, message: error, completed: true, error })
+}
+
+// 获取指定作品上一章的最后 N 字作为前文衔接上下文
+async function getPreviousContext(workId: number, currentChapterNumber: number, tailLength = 800): Promise<string | undefined> {
+  if (currentChapterNumber <= 1) return undefined
+  const db = getDb()
+  const [prevChapter] = await db
+    .select({ content: fanFictionChapters.content })
+    .from(fanFictionChapters)
+    .where(sql`${fanFictionChapters.workId} = ${workId} AND ${fanFictionChapters.chapterNumber} = ${currentChapterNumber - 1}`)
+  return prevChapter?.content ? prevChapter.content.slice(-tailLength) : undefined
+}
+
+// 从 outline 对象构建注入 prompt 的字符串
+function buildOutlineSection(outline: Outline): string {
+  const parts: string[] = []
+  parts.push("【故事大纲】")
+  if (outline.overview) {
+    parts.push("故事概述：" + outline.overview)
+  }
+  if (outline.scenes && outline.scenes.length > 0) {
+    parts.push("章节规划：")
+    for (const scene of outline.scenes) {
+      parts.push(`- ${scene.title}：${scene.description}`)
+    }
+  }
+  return parts.join("\n")
+}
+
+// 生成单章内容（被 batch 复用）
+async function generateSingleChapter(
+  _workId: number,
+  seriesId: number,
+  chapterNumber: number,
+  chapterTitle: string,
+  chapterBrief: string,
+  params: Partial<GenParams>,
+  options: {
+    parentNovelId?: number
+    userPrompt?: string
+    useMaterials?: boolean
+    materialIds?: number[]
+    selectedCharacterIds?: number[]
+    selectedTropeIds?: number[]
+    hotkeyTropeIds?: number[]
+    outlineSection?: string
+    previousContext?: string
+  }
+): Promise<{ content: string; ragCalls: RagCall[]; warnings?: string[] }> {
+  const { prompt, ragCalls, warnings } = await buildSystemPrompt(
+    seriesId,
+    chapterBrief,
+    params,
+    options.parentNovelId,
+    options.userPrompt,
+    options.useMaterials,
+    options.materialIds,
+    options.selectedCharacterIds,
+    options.selectedTropeIds,
+    options.hotkeyTropeIds,
+    options.outlineSection,
+    options.previousContext,
+  )
+
+  const response = await chatCompletion({
+    messages: [
+      { role: "system", content: prompt },
+      { role: "user", content: `请创作第 ${chapterNumber} 章《${chapterTitle}》。要求：${chapterBrief}` },
+    ],
+    temperature: params.temperature ?? 0.8,
+    maxTokens: params.lengthTarget === "short" ? 2000 : params.lengthTarget === "arc" ? 6000 : 4000,
+  })
+
+  return { content: sanitizeGeneratedContent(response), ragCalls, warnings }
+}
+
+// 清洗 AI 生成内容中的元话语
+function sanitizeGeneratedContent(text: string): string {
+  const patterns = [
+    /^(以下是[第\d]*章[：:]?\s*)/i,
+    /^(第[一二三四五六七八九十百千\d]+章[：:]?\s*)/i,
+    /^(本章[内容]*[：:]?\s*)/i,
+    /^(正文[：:]?\s*)/i,
+  ]
+  let result = text.trim()
+  for (const p of patterns) {
+    result = result.replace(p, "")
+  }
+  return result.trim()
 }
 
 // 生成参数 Schema
@@ -1501,6 +1590,189 @@ export const generateRouter = createRouter({
         .from(fanFictionWorks)
         .where(eq(fanFictionWorks.id, input.id))
       return work || null
+    }),
+
+  batch: publicQuery
+    .input(batchGenerationSchema)
+    .mutation(async ({ input }) => {
+      const db = getDb()
+
+      const [work] = await db
+        .select()
+        .from(fanFictionWorks)
+        .where(eq(fanFictionWorks.id, input.workId))
+      if (!work) throw new Error("作品不存在")
+      if (!work.seriesId) throw new Error("作品未关联系列")
+
+      // Check for existing running batch
+      const existingJobs = await db
+        .select()
+        .from(generationJobs)
+        .where(sql`${generationJobs.metadata}->>'workId' = ${String(input.workId)} AND ${generationJobs.status} = ${"running"}`)
+      if (existingJobs.length > 0) {
+        throw new Error(`已有进行中的批量生成任务（jobId: ${existingJobs[0].id}）`)
+      }
+
+      const [job] = await db
+        .insert(generationJobs)
+        .values({
+          type: "batch",
+          status: "running",
+          progress: 0,
+          metadata: {
+            workId: input.workId,
+            totalChapters: input.chapterConfigs.length,
+            currentChapter: 0,
+            chapterConfigs: input.chapterConfigs,
+            params: input.params,
+          },
+        })
+        .returning()
+
+      const runBatch = async () => {
+        try {
+          const workParams = (work.parameters ?? {}) as Partial<GenParams>
+          const mergedParams = { ...workParams, ...input.params }
+          const outline = work.outline ? safeParseOutline(work.outline).outline : undefined
+          const outlineSection = outline ? buildOutlineSection(outline) : undefined
+
+          for (let i = 0; i < input.chapterConfigs.length; i++) {
+            const config = input.chapterConfigs[i]
+            const previousContext = await getPreviousContext(input.workId, config.chapterNumber)
+
+            // Skip already-generated chapters (resume support)
+            const [existing] = await db
+              .select()
+              .from(fanFictionChapters)
+              .where(sql`${fanFictionChapters.workId} = ${input.workId} AND ${fanFictionChapters.chapterNumber} = ${config.chapterNumber}`)
+
+            if (existing?.status === "generated") continue
+
+            const { content } = await generateSingleChapter(
+              input.workId, work.seriesId!, config.chapterNumber,
+              config.title, config.brief, mergedParams,
+              { parentNovelId: work.parentNovelId ?? undefined, outlineSection, previousContext }
+            )
+
+            if (existing) {
+              await db.update(fanFictionChapters)
+                .set({ content, status: "generated", updatedAt: new Date() })
+                .where(eq(fanFictionChapters.id, existing.id))
+            } else {
+              await db.insert(fanFictionChapters).values({
+                workId: input.workId, chapterNumber: config.chapterNumber,
+                title: config.title, content, brief: config.brief,
+                parameters: mergedParams, status: "generated",
+              })
+            }
+
+            await db.update(generationJobs)
+              .set({
+                progress: ((i + 1) / input.chapterConfigs.length) * 100,
+                metadata: {
+                  workId: input.workId,
+                  totalChapters: input.chapterConfigs.length,
+                  currentChapter: config.chapterNumber,
+                  chapterConfigs: input.chapterConfigs,
+                  params: input.params,
+                },
+              })
+              .where(eq(generationJobs.id, job.id))
+          }
+
+          await db.update(generationJobs)
+            .set({ status: "completed", progress: 100 })
+            .where(eq(generationJobs.id, job.id))
+
+          await db.update(fanFictionWorks)
+            .set({ status: "completed" })
+            .where(eq(fanFictionWorks.id, input.workId))
+        } catch (err) {
+          await db.update(generationJobs)
+            .set({ status: "failed", errorLog: String(err) })
+            .where(eq(generationJobs.id, job.id))
+        }
+      }
+
+      setImmediate(() => { runBatch().catch(console.error) })
+
+      return { jobId: job.id }
+    }),
+
+  batchStatus: publicQuery
+    .input(z.object({ jobId: z.number() }))
+    .query(async ({ input }) => {
+      const db = getDb()
+      const [job] = await db.select().from(generationJobs).where(eq(generationJobs.id, input.jobId))
+      if (!job) throw new Error("任务不存在")
+
+      const workId = (job.metadata as Record<string, unknown> | null)?.workId as number | undefined
+      let completedChapters: Array<{ chapterNumber: number; title: string | null; status: string }> = []
+      if (workId) {
+        completedChapters = await db
+          .select({ chapterNumber: fanFictionChapters.chapterNumber, title: fanFictionChapters.title, status: fanFictionChapters.status })
+          .from(fanFictionChapters)
+          .where(eq(fanFictionChapters.workId, workId))
+          .orderBy(asc(fanFictionChapters.chapterNumber))
+      }
+
+      return {
+        jobId: job.id, status: job.status, progress: job.progress, errorLog: job.errorLog,
+        currentChapter: (job.metadata as Record<string, unknown>)?.currentChapter as number | undefined,
+        totalChapters: (job.metadata as Record<string, unknown>)?.totalChapters as number | undefined,
+        completedChapters,
+      }
+    }),
+
+  batchRetry: publicQuery
+    .input(z.object({ jobId: z.number() }))
+    .mutation(async ({ input }) => {
+      const db = getDb()
+      const [job] = await db.select().from(generationJobs).where(eq(generationJobs.id, input.jobId))
+      if (!job) throw new Error("任务不存在")
+      await db.delete(generationJobs).where(eq(generationJobs.id, input.jobId))
+      return { message: "已重置，请重新调用 batch" }
+    }),
+
+  export: publicQuery
+    .input(exportWorkSchema)
+    .mutation(async ({ input }) => {
+      const db = getDb()
+      const [work] = await db.select().from(fanFictionWorks).where(eq(fanFictionWorks.id, input.workId))
+      if (!work) throw new Error("作品不存在")
+
+      const chapterRows = await db
+        .select()
+        .from(fanFictionChapters)
+        .where(eq(fanFictionChapters.workId, input.workId))
+        .orderBy(asc(fanFictionChapters.chapterNumber))
+
+      if (chapterRows.length === 0 && work.generatedContent) {
+        return { content: work.generatedContent, filename: `${work.title || "export"}.${input.format}`, chapterCount: 1 }
+      }
+      if (chapterRows.length === 0) throw new Error("作品内容为空，无内容可导出")
+
+      let content = ""
+      if (input.format === "txt") {
+        content = `《${work.title || "未命名作品"}》\n\n简介：${work.brief || "无"}\n\n===\n\n`
+        for (const ch of chapterRows) {
+          content += `第${ch.chapterNumber}章 ${ch.title || ""}\n\n${ch.content}\n\n`
+        }
+      } else {
+        content = `# ${work.title || "未命名作品"}\n\n> ${work.brief || ""}\n\n---\n\n`
+        for (const ch of chapterRows) {
+          content += `## 第${ch.chapterNumber}章 ${ch.title || ""}\n\n${ch.content}\n\n`
+        }
+      }
+
+      return { content, filename: `${work.title || "export"}.${input.format}`, chapterCount: chapterRows.length }
+    }),
+
+  listChapters: publicQuery
+    .input(z.object({ workId: z.number() }))
+    .query(async ({ input }) => {
+      const db = getDb()
+      return db.select().from(fanFictionChapters).where(eq(fanFictionChapters.workId, input.workId)).orderBy(asc(fanFictionChapters.chapterNumber))
     }),
 
   updateWork: publicQuery
