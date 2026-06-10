@@ -17,6 +17,7 @@ import {
   bookmarks,
   annotations,
   readingProgress,
+  generationMetrics,
 } from "./schema"
 
 export const novelsRelations = relations(novels, ({ many }) => ({
@@ -172,6 +173,17 @@ export const fanFictionChaptersRelations = relations(fanFictionChapters, ({ one 
   work: one(fanFictionWorks, {
     fields: [fanFictionChapters.workId],
     references: [fanFictionWorks.id],
+  }),
+}))
+
+export const generationMetricsRelations = relations(generationMetrics, ({ one }) => ({
+  work: one(fanFictionWorks, {
+    fields: [generationMetrics.workId],
+    references: [fanFictionWorks.id],
+  }),
+  chapter: one(fanFictionChapters, {
+    fields: [generationMetrics.chapterId],
+    references: [fanFictionChapters.id],
   }),
 }))
 

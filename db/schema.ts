@@ -10,6 +10,7 @@ import {
   real,
   vector,
   unique,
+  index,
 } from "drizzle-orm/pg-core"
 
 // 小说主表
@@ -183,7 +184,7 @@ export const fanFictionChapters = pgTable("fan_fiction_chapters", {
    * - pending:    已创建章节配置，尚未开始生成
    * - generating: AI 正在生成中
    * - generated:  生成成功，内容可用
-   * - failed:     生成失败，记录 errorLog，可重试
+   * - failed:     生成失败，记录错误信息，可重试
    */
   status: varchar("status", { length: 50 }).notNull().default("pending"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
@@ -305,7 +306,8 @@ export const generationMetrics = pgTable("generation_metrics", {
   id: serial("id").primaryKey(),
   jobId: integer("job_id"),                    // 关联 generationJobs.id
   workId: integer("work_id"),                  // 关联 fanFictionWorks.id
-  chapterNumber: integer("chapter_number"),    // 关联 fanFictionChapters.chapter_number
+  chapterId: integer("chapter_id"),            // 关联 fanFictionChapters.id
+  chapterNumber: integer("chapter_number"),    // 业务章节编号
   type: varchar("type", { length: 50 }).notNull(), // "single" | "batch" | "outline"
 
   // 时间指标
@@ -334,7 +336,11 @@ export const generationMetrics = pgTable("generation_metrics", {
   errorMessage: text("error_message"),
 
   createdAt: timestamp("created_at").notNull().defaultNow(),
-})
+}, (table) => [
+  index("idx_generation_metrics_work_id").on(table.workId),
+  index("idx_generation_metrics_job_id").on(table.jobId),
+  index("idx_generation_metrics_created_at").on(table.createdAt),
+])
 
 // 操作审计日志（支持撤销）
 export const auditLogs = pgTable("audit_logs", {
