@@ -1900,7 +1900,17 @@ export const generateRouter = createRouter({
         .where(eq(fanFictionWorks.id, input.workId))
 
       if (!work) throw new Error("作品不存在")
-      if (!work.generatedContent) throw new Error("作品内容为空")
+
+      // Try fanFictionChapters first (multi-chapter works)
+      const chapterRows = await db
+        .select()
+        .from(fanFictionChapters)
+        .where(eq(fanFictionChapters.workId, input.workId))
+        .orderBy(asc(fanFictionChapters.chapterNumber))
+
+      if (chapterRows.length === 0 && !work.generatedContent) {
+        throw new Error("作品内容为空")
+      }
 
       // 创建小说记录
       const [novel] = await db
@@ -1918,13 +1928,25 @@ export const generateRouter = createRouter({
         })
         .returning()
 
-      // 创建章节（单章，内容为全部生成内容）
-      await db.insert(chapters).values({
-        novelId: novel.id,
-        chapterNumber: 1,
-        title: work.title || "第1章",
-        contentOriginal: work.generatedContent,
-      })
+      if (chapterRows.length > 0) {
+        // Multi-chapter: insert each chapter
+        for (const ch of chapterRows) {
+          await db.insert(chapters).values({
+            novelId: novel.id,
+            chapterNumber: ch.chapterNumber,
+            title: ch.title || `第${ch.chapterNumber}章`,
+            contentOriginal: ch.content,
+          })
+        }
+      } else {
+        // Single-chapter fallback
+        await db.insert(chapters).values({
+          novelId: novel.id,
+          chapterNumber: 1,
+          title: work.title || "第1章",
+          contentOriginal: work.generatedContent,
+        })
+      }
 
       // 更新二创作品状态
       await db

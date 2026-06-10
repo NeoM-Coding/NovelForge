@@ -9,6 +9,7 @@ import {
   boolean,
   real,
   vector,
+  unique,
 } from "drizzle-orm/pg-core"
 
 // 小说主表
@@ -180,7 +181,9 @@ export const fanFictionChapters = pgTable("fan_fiction_chapters", {
   status: varchar("status", { length: 50 }).notNull().default("draft"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
-})
+}, (table) => [
+  unique().on(table.workId, table.chapterNumber),
+])
 
 // 生成任务记录
 export const generationJobs = pgTable("generation_jobs", {
