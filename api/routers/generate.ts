@@ -2195,7 +2195,7 @@ export const generateRouter = createRouter({
           chapter.title || `第${input.chapterNumber}章`,
           chapter.brief || "",
           workParams,
-          { ...genOptions, previousContext },
+          { ...genOptions, previousContext, jobId: undefined },
         )
 
         // 6. 成功后 update 为 generated
