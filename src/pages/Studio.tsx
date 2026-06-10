@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react"
+import { useState, useEffect, useRef } from "react"
 import { useParams } from "react-router"
 import { trpc } from "@/providers/trpc"
 import { useToast } from "@/providers/toast"
@@ -284,6 +284,22 @@ export default function Studio() {
   const regenerateMutation = trpc.generate.regenerate.useMutation()
 
   const toast = useToast()
+
+  const batchMutation = trpc.generate.batch.useMutation()
+  const exportMutation = trpc.generate.export.useMutation()
+
+  const [batchJobId, setBatchJobId] = useState(0)
+  const [isBatchGenerating, setIsBatchGenerating] = useState(false)
+
+  const batchStatusQuery = trpc.generate.batchStatus.useQuery(
+    { jobId: batchJobId },
+    { enabled: batchJobId > 0, refetchInterval: 2000 }
+  )
+
+  const listChaptersQuery = trpc.generate.listChapters.useQuery(
+    { workId: generatedWorkId || 0 },
+    { enabled: !!generatedWorkId }
+  )
 
   const saveAsStyleSampleMutation = trpc.material.saveAsStyleSample.useMutation({
     onSuccess: () => {
@@ -737,16 +753,81 @@ export default function Studio() {
     toast.info("草稿已丢弃")
   }
 
+  // 批量生成
+  const handleBatchGenerate = async () => {
+    if (!generatedWorkId) {
+      toast.error("请先保存作品")
+      return
+    }
+    if (!outlineScenes || outlineScenes.length === 0) {
+      toast.error("请先生成或创建大纲场景")
+      return
+    }
+
+    const chapterConfigs = outlineScenes.map((scene, index) => ({
+      chapterNumber: index + 1,
+      title: scene.title,
+      brief: scene.description,
+    }))
+
+    try {
+      setIsBatchGenerating(true)
+      const result = await batchMutation.mutateAsync({
+        workId: generatedWorkId,
+        chapterConfigs,
+        params: {
+          temperature: params.temperature,
+          styleFidelity: params.styleFidelity,
+          characterLoyalty: params.characterLoyalty,
+          tone: params.tone,
+          lengthTarget: params.lengthTarget,
+          canonConstraint: params.canonConstraint,
+          writingMode: params.writingMode,
+          ragLimit: params.ragLimit,
+        },
+      })
+      setBatchJobId(result.jobId)
+      toast.success(`批量生成已启动（jobId: ${result.jobId}）`)
+    } catch (err) {
+      toast.error(String(err))
+      setIsBatchGenerating(false)
+    }
+  }
+
+  // 批量生成完成监听
+  useEffect(() => {
+    if (batchStatusQuery.data?.status === "completed") {
+      setIsBatchGenerating(false)
+      toast.success("批量生成完成！")
+      listChaptersQuery.refetch()
+    } else if (batchStatusQuery.data?.status === "failed") {
+      setIsBatchGenerating(false)
+      toast.error(`批量生成失败：${batchStatusQuery.data.errorLog}`)
+    }
+  }, [batchStatusQuery.data])
+
   // 导出
-  const handleExport = useCallback(() => {
-    const blob = new Blob([content], { type: "text/plain" })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement("a")
-    a.href = url
-    a.download = `${title || "untitled"}.txt`
-    a.click()
-    URL.revokeObjectURL(url)
-  }, [content, title])
+  const handleExport = async (format: "txt" | "markdown" = "txt") => {
+    if (!generatedWorkId) {
+      toast.error("没有可导出的作品")
+      return
+    }
+    try {
+      const result = await exportMutation.mutateAsync({ workId: generatedWorkId, format })
+      const blob = new Blob([result.content], { type: "text/plain;charset=utf-8" })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = result.filename
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+      toast.success(`已导出 ${result.chapterCount} 章`)
+    } catch (err) {
+      toast.error(String(err))
+    }
+  }
 
   // 续写
   const handleContinue = async () => {
@@ -927,14 +1008,24 @@ export default function Studio() {
                 <Sparkles className="w-3.5 h-3.5" />
                 保存为风格样本
               </button>
-              <button
-                onClick={handleExport}
-                disabled={!content}
-                className="flex items-center gap-2 px-4 py-1.5 rounded-full bg-white/5 hover:bg-white/10 disabled:opacity-30 text-sm transition-colors"
-              >
-                <Download className="w-3.5 h-3.5" />
-                导出
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => handleExport("txt")}
+                  disabled={exportMutation.isPending || (!content && !listChaptersQuery.data?.length)}
+                  className="px-3 py-1.5 bg-white/5 hover:bg-white/10 disabled:opacity-30 rounded-lg text-xs text-white/70 transition-colors flex items-center gap-1.5"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  导出 TXT
+                </button>
+                <button
+                  onClick={() => handleExport("markdown")}
+                  disabled={exportMutation.isPending || (!content && !listChaptersQuery.data?.length)}
+                  className="px-3 py-1.5 bg-white/5 hover:bg-white/10 disabled:opacity-30 rounded-lg text-xs text-white/70 transition-colors flex items-center gap-1.5"
+                >
+                  <FileText className="w-3.5 h-3.5" />
+                  导出 MD
+                </button>
+              </div>
             </div>
           </header>
 
@@ -1671,24 +1762,67 @@ export default function Studio() {
                         </div>
                       )}
 
-                      {/* 确认并生成正文按钮 */}
-                      <button
-                        onClick={handleGenerate}
-                        disabled={isGenerating || !selectedSeriesId || !brief.trim()}
-                        className="w-full py-3 bg-amber-500 hover:bg-amber-400 disabled:opacity-30 text-[#111827] rounded-full font-medium text-sm transition-colors flex items-center justify-center gap-2"
-                      >
-                        {isGenerating ? (
-                          <>
-                            <Sparkles className="w-4 h-4 animate-spin" />
-                            生成中...
-                          </>
-                        ) : (
-                          <>
-                            <Wand2 className="w-4 h-4" />
-                            确认并生成正文
-                          </>
-                        )}
-                      </button>
+                      {/* 生成按钮组 */}
+                      {outlineScenes && outlineScenes.length > 0 && (
+                        <div className="flex gap-2 mt-3">
+                          <button
+                            onClick={handleGenerate}
+                            disabled={isGenerating || !generatedWorkId}
+                            className="flex-1 px-4 py-2 bg-amber-500 hover:bg-amber-400 disabled:opacity-50 rounded-lg text-sm font-medium text-black transition-colors"
+                          >
+                            {isGenerating ? "生成中..." : "确认并生成正文"}
+                          </button>
+                          <button
+                            onClick={handleBatchGenerate}
+                            disabled={isBatchGenerating || !generatedWorkId}
+                            className="flex-1 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 rounded-lg text-sm font-medium text-white transition-colors"
+                          >
+                            {isBatchGenerating
+                              ? `批量生成中 (${batchStatusQuery.data?.progress?.toFixed(0) || 0}%)`
+                              : `一键生成 ${outlineScenes.length} 章`}
+                          </button>
+                        </div>
+                      )}
+
+                      {/* 批量生成进度 */}
+                      {isBatchGenerating && batchStatusQuery.data && (
+                        <div className="mt-3 space-y-2">
+                          <div className="flex justify-between text-xs text-white/60">
+                            <span>批量生成进度</span>
+                            <span>{batchStatusQuery.data.progress?.toFixed(0) || 0}%</span>
+                          </div>
+                          <div className="h-1.5 bg-white/10 rounded-full overflow-hidden">
+                            <div
+                              className="h-full bg-emerald-500 transition-all duration-500"
+                              style={{ width: `${batchStatusQuery.data.progress || 0}%` }}
+                            />
+                          </div>
+                          {batchStatusQuery.data.completedChapters && batchStatusQuery.data.completedChapters.length > 0 && (
+                            <div className="text-xs text-white/40">
+                              已完成：{batchStatusQuery.data.completedChapters.map(c => `第${c.chapterNumber}章`).join("、")}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* 已生成章节列表 */}
+                      {listChaptersQuery.data && listChaptersQuery.data.length > 0 && (
+                        <div className="mt-4 space-y-1">
+                          <h4 className="text-xs font-medium text-white/50 uppercase tracking-wider">已生成章节</h4>
+                          <div className="max-h-40 overflow-y-auto space-y-1">
+                            {listChaptersQuery.data.map(ch => (
+                              <div
+                                key={ch.id}
+                                className="flex items-center gap-2 px-2 py-1.5 rounded bg-white/5 text-sm"
+                              >
+                                <span className="text-amber-400 text-xs">第{ch.chapterNumber}章</span>
+                                <span className="text-white/80 truncate">{ch.title || "未命名"}</span>
+                                <span className="ml-auto text-xs text-white/30">{ch.status === "generated" ? "✓" : ch.status}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </>
                   )}
                 </div>
