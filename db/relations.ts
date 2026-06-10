@@ -11,6 +11,7 @@ import {
   vectorChunks,
   translationMemory,
   fanFictionWorks,
+  fanFictionChapters,
   materials,
   plotTropes,
   bookmarks,
@@ -90,7 +91,7 @@ export const seriesCanonRelations = relations(seriesCanon, ({ one }) => ({
   }),
 }))
 
-export const fanFictionWorksRelations = relations(fanFictionWorks, ({ one }) => ({
+export const fanFictionWorksRelations = relations(fanFictionWorks, ({ one, many }) => ({
   series: one(series, {
     fields: [fanFictionWorks.seriesId],
     references: [series.id],
@@ -99,6 +100,7 @@ export const fanFictionWorksRelations = relations(fanFictionWorks, ({ one }) => 
     fields: [fanFictionWorks.parentNovelId],
     references: [novels.id],
   }),
+  chapters: many(fanFictionChapters),
 }))
 
 export const vectorChunksRelations = relations(vectorChunks, ({ one }) => ({
@@ -163,6 +165,13 @@ export const readingProgressRelations = relations(readingProgress, ({ one }) => 
   novel: one(novels, {
     fields: [readingProgress.novelId],
     references: [novels.id],
+  }),
+}))
+
+export const fanFictionChaptersRelations = relations(fanFictionChapters, ({ one }) => ({
+  work: one(fanFictionWorks, {
+    fields: [fanFictionChapters.workId],
+    references: [fanFictionWorks.id],
   }),
 }))
 

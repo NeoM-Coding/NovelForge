@@ -168,14 +168,29 @@ export const fanFictionWorks = pgTable("fan_fiction_works", {
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 })
 
+// 二创作品章节表（支持多章节长篇小说）
+export const fanFictionChapters = pgTable("fan_fiction_chapters", {
+  id: serial("id").primaryKey(),
+  workId: integer("work_id").notNull(),
+  chapterNumber: integer("chapter_number").notNull(),
+  title: varchar("title", { length: 500 }),
+  content: text("content").notNull().default(""),
+  brief: text("brief"),
+  parameters: jsonb("parameters"),
+  status: varchar("status", { length: 50 }).notNull().default("draft"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+})
+
 // 生成任务记录
 export const generationJobs = pgTable("generation_jobs", {
   id: serial("id").primaryKey(),
   type: varchar("type", { length: 50 }).notNull(),
   status: varchar("status", { length: 50 }).notNull().default("pending"),
   progress: real("progress").notNull().default(0),
-  result: text("result"),
+  result: jsonb("result"),
   errorLog: text("error_log"),
+  metadata: jsonb("metadata"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 })
 
