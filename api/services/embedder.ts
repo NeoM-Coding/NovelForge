@@ -122,6 +122,8 @@ export interface SearchResult {
   totalChunks?: number
   contextBefore?: string
   contextAfter?: string
+  /** 检索召回方式：strict = 正常检索；expanded = 去掉 novelId 按 seriesId 全局检索；fallback = pg_trgm 最低阈值兜底 */
+  recallMethod?: "strict" | "expanded" | "fallback"
 }
 
 export async function searchSimilar(
@@ -221,6 +223,7 @@ export async function searchSimilar(
       contextBefore,
       contextAfter,
       qualityScore: Number(metadata.qualityScore || 1.0),
+      recallMethod: "strict" as const,
     }
   })
 
@@ -235,6 +238,57 @@ export async function searchSimilar(
   if (mapped.length > 0) {
     const enriched = await enrichWithAdjacentChunks(mapped)
     return enriched
+  }
+
+  // ========== 空结果降级逻辑 ==========
+  // 1. expanded：去掉 novelId 限制，按 seriesId 全局检索
+  if (options?.novelId && options?.seriesId) {
+    console.warn(`[searchSimilar] 严格检索无结果，降级为 expanded（去掉 novelId=${options.novelId}，保留 seriesId=${options.seriesId}）`)
+    const expandedResults = await searchSimilar(query, {
+      seriesId: options.seriesId,
+      limit,
+      embedding,
+      materialIds: options.materialIds,
+    })
+    if (expandedResults.length > 0) {
+      return expandedResults.map(r => ({ ...r, recallMethod: "expanded" as const }))
+    }
+  }
+
+  // 2. fallback：使用 pg_trgm % 操作符最低阈值兜底（仅当 seriesId 存在时）
+  if (options?.seriesId) {
+    try {
+      const fallbackQuery = query.slice(0, 100)
+      const fallback = await db.execute(sql`
+        SELECT id, content, source_type, metadata,
+          similarity(content, ${fallbackQuery}) as similarity
+        FROM vector_chunks
+        WHERE series_id = ${options.seriesId}
+          AND content % ${fallbackQuery}
+        ORDER BY similarity(content, ${fallbackQuery}) DESC
+        LIMIT ${limit}
+      `)
+      const fallbackRows = Array.isArray(fallback) ? fallback : []
+      if (fallbackRows.length > 0) {
+        console.warn(`[searchSimilar] expanded 仍无结果，降级为 fallback（pg_trgm，seriesId=${options.seriesId}）`)
+        return fallbackRows.map((row: Record<string, unknown>) => {
+          const metadata = (row.metadata as Record<string, unknown>) || {}
+          return {
+            id: row.id ? Number(row.id) : undefined,
+            content: String(row.content),
+            similarity: Number(row.similarity) || 0,
+            sourceType: String(row.source_type),
+            sourceTitle: metadata.sourceTitle ? String(metadata.sourceTitle) : undefined,
+            chapterNumber: metadata.chapterNumber ? Number(metadata.chapterNumber) : undefined,
+            chunkIndex: metadata.chunkIndex ? Number(metadata.chunkIndex) : undefined,
+            totalChunks: metadata.totalChunks ? Number(metadata.totalChunks) : undefined,
+            recallMethod: "fallback" as const,
+          }
+        })
+      }
+    } catch {
+      // pg_trgm 可能未安装，忽略
+    }
   }
 
   return mapped

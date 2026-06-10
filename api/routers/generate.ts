@@ -90,8 +90,8 @@ async function generateSingleChapter(
     previousContext?: string
     worldBible?: typeof worldBibles.$inferSelect
   }
-): Promise<{ content: string; ragCalls: RagCall[]; warnings?: string[] }> {
-  const { prompt, ragCalls, warnings } = await buildSystemPrompt(
+): Promise<{ content: string; ragCalls: RagCall[]; warnings?: string[]; truncated?: string[] }> {
+  const { prompt, ragCalls, warnings, truncated } = await buildSystemPrompt(
     seriesId,
     chapterBrief,
     params,
@@ -125,7 +125,7 @@ async function generateSingleChapter(
     }
   }
 
-  return { content, ragCalls, warnings }
+  return { content, ragCalls, warnings, truncated }
 }
 
 // 清洗 AI 生成内容中的元话语
@@ -859,7 +859,7 @@ async function buildSystemPrompt(
   hotkeyTropeIds?: number[],
   outlineSection?: string,
   previousContext?: string,
-): Promise<{ prompt: string; ragCalls: RagCall[]; warnings?: string[] }> {
+): Promise<{ prompt: string; ragCalls: RagCall[]; warnings?: string[]; truncated?: string[] }> {
   const params: GenParams = {
     temperature: rawParams.temperature ?? 0.8,
     styleFidelity: rawParams.styleFidelity ?? 7,
@@ -1139,7 +1139,7 @@ async function buildSystemPrompt(
     console.warn(`[buildSystemPrompt] 截断了 ${truncated.length} 个模块: ${truncated.join(", ")}`)
   }
 
-  return { prompt, ragCalls: extendedRagCalls, warnings: warnings.length > 0 ? warnings : undefined }
+  return { prompt, ragCalls: extendedRagCalls, warnings: warnings.length > 0 ? warnings : undefined, truncated: truncated.length > 0 ? truncated : undefined }
 }
 
 // 辅助：查询用户历史高频使用的桥段（热键）
@@ -1343,7 +1343,7 @@ export const generateRouter = createRouter({
           }
         }
 
-        const { prompt: systemPrompt, ragCalls, warnings } = await buildSystemPrompt(
+        const { prompt: systemPrompt, ragCalls, warnings, truncated } = await buildSystemPrompt(
           input.seriesId,
           input.brief,
           input.parameters,
@@ -1354,7 +1354,7 @@ export const generateRouter = createRouter({
           input.selectedCharacterIds,
           input.selectedTropeIds,
           hotkeyTropeIds,
-          outlineSection,  // ← 新增
+          outlineSection,
         )
 
         setProgress(taskId, 2, "正在组装创作指令...")
@@ -1478,7 +1478,7 @@ export const generateRouter = createRouter({
 
       completeProgress(taskId, { workId: work.id, title: finalTitle })
 
-      return { content: fullContent, workId: work.id, ragCalls, warnings, autoTitle, taskId }
+      return { content: fullContent, workId: work.id, ragCalls, warnings, autoTitle, taskId, truncated }
     } catch (err) {
       failProgress(taskId, String(err))
       throw err
