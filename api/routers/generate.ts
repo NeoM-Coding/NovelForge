@@ -1826,7 +1826,6 @@ export const generateRouter = createRouter({
               (async () => {
                 // Resume support: skip already-generated chapters
                 if (existing?.status === "generated") {
-                  skippedCount++
                   return { status: "skipped" as const, config }
                 }
 
@@ -1858,7 +1857,6 @@ export const generateRouter = createRouter({
                   })
                 }
 
-                generatedCount++
                 return { status: "fulfilled" as const, config }
               })()
             )
@@ -1868,7 +1866,13 @@ export const generateRouter = createRouter({
             for (let r = 0; r < results.length; r++) {
               const result = results[r]
               const config = batchSlice[r]
-              if (result.status === "rejected") {
+              if (result.status === "fulfilled") {
+                if (result.value.status === "skipped") {
+                  skippedCount++
+                } else {
+                  generatedCount++
+                }
+              } else {
                 failedChapters.push({
                   chapterNumber: config.chapterNumber,
                   title: config.title,
@@ -1915,6 +1919,11 @@ export const generateRouter = createRouter({
                 },
               })
               .where(eq(generationJobs.id, jobId))
+
+            await db
+              .update(fanFictionWorks)
+              .set({ status: "failed" })
+              .where(eq(fanFictionWorks.id, workId))
           } else if (failedChapters.length > 0) {
             // Partial failure
             await db
@@ -1956,7 +1965,7 @@ export const generateRouter = createRouter({
             .update(generationJobs)
             .set({
               status: "failed",
-              errorLog: String(err),
+              errorLog: `批次编排异常：${String(err)}`,
               metadata: {
                 workId,
                 totalChapters: total,
@@ -1967,6 +1976,11 @@ export const generateRouter = createRouter({
               },
             })
             .where(eq(generationJobs.id, jobId))
+
+          await db
+            .update(fanFictionWorks)
+            .set({ status: "failed" })
+            .where(eq(fanFictionWorks.id, workId))
         }
       }
 
