@@ -178,7 +178,14 @@ export const fanFictionChapters = pgTable("fan_fiction_chapters", {
   content: text("content").notNull().default(""),
   brief: text("brief"),
   parameters: jsonb("parameters"),
-  status: varchar("status", { length: 50 }).notNull().default("draft"),
+  /**
+   * 四级状态机：pending → generating → generated | failed
+   * - pending:    已创建章节配置，尚未开始生成
+   * - generating: AI 正在生成中
+   * - generated:  生成成功，内容可用
+   * - failed:     生成失败，记录 errorLog，可重试
+   */
+  status: varchar("status", { length: 50 }).notNull().default("pending"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 }, (table) => [
@@ -290,6 +297,42 @@ export const ragFeedback = pgTable("rag_feedback", {
   content: text("content"),
   wasHelpful: boolean("was_helpful"),
   similarityScore: real("similarity_score"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+})
+
+// 生成质量指标（每章/每次生成任务的详细指标，用于可观测性）
+export const generationMetrics = pgTable("generation_metrics", {
+  id: serial("id").primaryKey(),
+  jobId: integer("job_id"),                    // 关联 generationJobs.id
+  workId: integer("work_id"),                  // 关联 fanFictionWorks.id
+  chapterNumber: integer("chapter_number"),    // 关联 fanFictionChapters.chapter_number
+  type: varchar("type", { length: 50 }).notNull(), // "single" | "batch" | "outline"
+
+  // 时间指标
+  startedAt: timestamp("started_at").notNull().defaultNow(),
+  completedAt: timestamp("completed_at"),
+  durationMs: integer("duration_ms"),
+
+  // Token 指标
+  promptTokens: integer("prompt_tokens"),
+  completionTokens: integer("completion_tokens"),
+  totalTokens: integer("total_tokens"),
+
+  // RAG 指标
+  ragRecallCount: integer("rag_recall_count"),
+  ragTopSimilarity: real("rag_top_similarity"),
+  ragEmptyResult: boolean("rag_empty_result").default(false),
+  ragTruncated: boolean("rag_truncated").default(false),
+
+  // 质量指标
+  selfCritiquePassed: boolean("self_critique_passed"),
+  selfCritiqueIssueCount: integer("self_critique_issue_count"),
+  worldViewCompliant: boolean("world_view_compliant"),
+
+  // 错误记录
+  errorType: varchar("error_type", { length: 50 }),
+  errorMessage: text("error_message"),
+
   createdAt: timestamp("created_at").notNull().defaultNow(),
 })
 
