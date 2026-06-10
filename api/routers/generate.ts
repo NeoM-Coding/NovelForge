@@ -5,7 +5,7 @@ import { characterCards, worldBibles, seriesCanon, fanFictionWorks, plotTropes, 
 import { eq, asc, desc, sql } from "drizzle-orm"
 import { streamChat, chatCompletion } from "../services/deepseek"
 import { searchSimilar, getEmbeddingWithCache } from "../services/embedder"
-import { type Outline } from "@contracts/schemas"
+import { outlineSchema, type Outline } from "@contracts/schemas"
 
 const WRITING_MODES = [
   "canon_continuation",
@@ -28,8 +28,8 @@ const generationProgress = new Map<string, GenerationProgress>()
 function setProgress(taskId: string, step: number, message: string) {
   generationProgress.set(taskId, { step, message, completed: false })
 }
-function completeProgress(taskId: string, result: { workId: number; title: string }) {
-  generationProgress.set(taskId, { step: 4, message: "创作完成", completed: true, result })
+function completeProgress(taskId: string, result: { workId: number; title: string }, finalStep = 4) {
+  generationProgress.set(taskId, { step: finalStep, message: "创作完成", completed: true, result })
 }
 function failProgress(taskId: string, error: string) {
   generationProgress.set(taskId, { step: -1, message: error, completed: true, error })
@@ -58,6 +58,16 @@ type RagCall = {
   chunkIndex?: number        // ← 新增：片段序号
   totalChunks?: number       // ← 新增：总片段数
   chunkId?: number           // ← 新增：vector_chunks.id，用于反馈闭环
+}
+
+type BaseContext = {
+  selectedChars: typeof characterCards.$inferSelect[]
+  unselectedChars: typeof characterCards.$inferSelect[]
+  worldBible: typeof worldBibles.$inferSelect | undefined
+  canonEvents: Array<typeof seriesCanon.$inferSelect>
+  ragCalls: RagCall[]
+  ragContent: string
+  warnings: string[]
 }
 
 // ========== 创作模式配置 ==========
@@ -120,49 +130,17 @@ const MODE_RAG_CONFIG: Record<
   alternate_universe:   { novelStyleLimit: 2, materialLimit: 4, keywordLimit: 2 },
 }
 
-function buildStyleGuide(fidelity: number): string {
-  const parts = [
-    "【文风指导】",
-    `风格忠实度 ${fidelity}/10：`,
-  ]
-
-  if (fidelity >= 9) {
-    parts.push("- 10分标准：严格模仿原作的字词选择、句式结构、修辞习惯和叙事节奏")
-    parts.push("- 注意原作作者的标志性表达方式和过渡手法")
-  } else if (fidelity >= 6) {
-    parts.push("- 7-9分标准：显著模仿原作风格，同时保持自然流畅")
-    parts.push("- 借鉴原作的叙事节奏和描写方式，但不生硬照搬")
-  } else if (fidelity >= 3) {
-    parts.push("- 3-6分标准：适度参考原作风格，允许个人发挥")
-    parts.push("- 保持中文小说的一般规范即可，不必刻意模仿")
-  } else {
-    parts.push("- 1-2分标准：仅借用世界观和角色，文风完全自由")
-    parts.push("- 你可以使用自己的独特写作风格")
-  }
-
-  parts.push("")
-  parts.push("执行要求（必须遵守）：")
-  parts.push("1. 句式长短交替，禁止连续使用相同句式结构")
-  parts.push("2. 对话必须符合角色设定的语气和词汇习惯")
-  parts.push("3. 环境描写与氛围设定一致，禁止堆砌辞藻")
-  parts.push("4. 禁止使用生造词汇、不通顺的比喻、欧化中文句式")
-  parts.push("5. 段落之间要有自然的过渡，禁止突兀的跳切")
-  parts.push("6. 叙事视角保持一致，不要随意切换")
-
-  return parts.join("\n")
-}
-
-async function buildOutlinePrompt(
+async function buildBaseContext(
   seriesId: number,
   brief: string,
   rawParams: Partial<GenParams>,
   parentNovelId?: number,
-  userPrompt?: string,
   useMaterials?: boolean,
   materialIds?: number[],
   selectedCharacterIds?: number[],
-  selectedTropeIds?: number[],
-): Promise<{ prompt: string; ragCalls: RagCall[]; warnings?: string[] }> {
+  _selectedTropeIds?: number[],
+  ragConfigOverride?: { novelStyleLimit: number; materialLimit: number; keywordLimit: number }
+): Promise<BaseContext> {
   const params: GenParams = {
     temperature: rawParams.temperature ?? 0.8,
     styleFidelity: rawParams.styleFidelity ?? 7,
@@ -212,7 +190,7 @@ async function buildOutlinePrompt(
     .where(eq(seriesCanon.seriesId, seriesId))
     .orderBy(asc(seriesCanon.eventOrder))
 
-  // 4. Hybrid RAG 检索（大纲专用权重）
+  // 4. Hybrid RAG 检索
   let briefEmbedding: number[] | undefined
   try {
     briefEmbedding = await getEmbeddingWithCache(brief)
@@ -235,15 +213,9 @@ async function buildOutlinePrompt(
       : ""
   }
 
-  // 大纲专用 RAG 配置：基于创作模式，但减少文风样本、增加情节素材
-  const modeConfig = MODE_RAG_CONFIG[mode]
-  const ragConfig = {
-    novelStyleLimit: 1, // 大纲阶段最小化文风样本
-    materialLimit: Math.max(5, modeConfig.materialLimit), // 大纲阶段最大化情节素材
-    keywordLimit: modeConfig.keywordLimit,
-  }
+  const ragConfig = ragConfigOverride ?? MODE_RAG_CONFIG[mode]
 
-  // 4a. 从关联小说做向量检索（仅1条风格参考）
+  // 4a. 从关联小说做向量检索
   if (parentNovelId) {
     const novelResults = await searchSimilar(brief, { novelId: parentNovelId, limit: ragConfig.novelStyleLimit, embedding: briefEmbedding })
     if (novelResults.length > 0) {
@@ -265,7 +237,7 @@ async function buildOutlinePrompt(
     }
   }
 
-  // 4b. 从素材池做向量检索（增加素材量）
+  // 4b. 从素材池做向量检索
   if (useMaterials !== false) {
     const materialVecResults = await searchSimilar(brief, { seriesId, limit: ragConfig.materialLimit, materialIds: materialIds?.length ? materialIds : undefined, embedding: briefEmbedding })
     if (materialVecResults.length > 0) {
@@ -346,7 +318,72 @@ async function buildOutlinePrompt(
     }
   }
 
-  // 6. 构建 System Prompt
+  return { selectedChars, unselectedChars, worldBible, canonEvents, ragCalls, ragContent, warnings }
+}
+
+function buildStyleGuide(fidelity: number): string {
+  const parts = [
+    "【文风指导】",
+    `风格忠实度 ${fidelity}/10：`,
+  ]
+
+  if (fidelity >= 9) {
+    parts.push("- 10分标准：严格模仿原作的字词选择、句式结构、修辞习惯和叙事节奏")
+    parts.push("- 注意原作作者的标志性表达方式和过渡手法")
+  } else if (fidelity >= 6) {
+    parts.push("- 7-9分标准：显著模仿原作风格，同时保持自然流畅")
+    parts.push("- 借鉴原作的叙事节奏和描写方式，但不生硬照搬")
+  } else if (fidelity >= 3) {
+    parts.push("- 3-6分标准：适度参考原作风格，允许个人发挥")
+    parts.push("- 保持中文小说的一般规范即可，不必刻意模仿")
+  } else {
+    parts.push("- 1-2分标准：仅借用世界观和角色，文风完全自由")
+    parts.push("- 你可以使用自己的独特写作风格")
+  }
+
+  parts.push("")
+  parts.push("执行要求（必须遵守）：")
+  parts.push("1. 句式长短交替，禁止连续使用相同句式结构")
+  parts.push("2. 对话必须符合角色设定的语气和词汇习惯")
+  parts.push("3. 环境描写与氛围设定一致，禁止堆砌辞藻")
+  parts.push("4. 禁止使用生造词汇、不通顺的比喻、欧化中文句式")
+  parts.push("5. 段落之间要有自然的过渡，禁止突兀的跳切")
+  parts.push("6. 叙事视角保持一致，不要随意切换")
+
+  return parts.join("\n")
+}
+
+async function buildOutlinePrompt(
+  seriesId: number,
+  brief: string,
+  rawParams: Partial<GenParams>,
+  parentNovelId?: number,
+  userPrompt?: string,
+  useMaterials?: boolean,
+  materialIds?: number[],
+  selectedCharacterIds?: number[],
+  selectedTropeIds?: number[],
+): Promise<{ prompt: string; ragCalls: RagCall[]; warnings?: string[] }> {
+  const params: GenParams = {
+    temperature: rawParams.temperature ?? 0.8,
+    styleFidelity: rawParams.styleFidelity ?? 7,
+    characterLoyalty: rawParams.characterLoyalty ?? 8,
+    tone: rawParams.tone ?? "dramatic",
+    lengthTarget: rawParams.lengthTarget ?? "chapter",
+    canonConstraint: rawParams.canonConstraint ?? "strict",
+    writingMode: rawParams.writingMode ?? "canon_continuation",
+    ragLimit: rawParams.ragLimit ?? 5,
+  }
+  const mode = params.writingMode
+  const db = getDb()
+
+  const modeConfig = MODE_RAG_CONFIG[mode]
+  const { selectedChars, unselectedChars, worldBible, canonEvents, ragCalls, ragContent, warnings } = await buildBaseContext(
+    seriesId, brief, rawParams, parentNovelId, useMaterials, materialIds, selectedCharacterIds, selectedTropeIds,
+    { novelStyleLimit: 1, materialLimit: Math.max(5, modeConfig.materialLimit), keywordLimit: modeConfig.keywordLimit }
+  )
+
+  // 构建 System Prompt
   const parts: string[] = [
     `你是一位精通中文小说创作的故事架构师。当前创作模式：${MODE_CONFIG[mode].name}。请根据以下设定，为指定创作方向生成一份结构化大纲。`,
     "",
@@ -499,6 +536,20 @@ ${rawText.slice(0, 3000)}`
   }
 }
 
+function safeParseOutline(raw: unknown): { valid: boolean; outline: Outline } {
+  const result = outlineSchema.safeParse(raw)
+  if (result.success) return { valid: true, outline: result.data }
+  // 降级：将原始对象包装为单一场景 overview
+  const fallback: Outline = {
+    overview: typeof raw === "object" && raw !== null
+      ? String((raw as Record<string, unknown>).overview || JSON.stringify(raw).slice(0, 500))
+      : String(raw).slice(0, 500),
+    generatedAt: new Date().toISOString(),
+    outlineType: "overview",
+  }
+  return { valid: false, outline: fallback }
+}
+
 // RAG 检索结果 AI 摘要：将碎片化的 chunks 提炼成连贯上下文
 async function summarizeRagChunks(chunks: RagCall[]): Promise<string | null> {
   if (chunks.length === 0) return null
@@ -633,208 +684,55 @@ async function buildSystemPrompt(
   const mode = params.writingMode
   const db = getDb()
 
-  // 1. 查询系列下所有角色（用于构建禁止列表、冲突检测、RAG 过滤）
-  const allCharacters = await db
-    .select()
-    .from(characterCards)
-    .where(eq(characterCards.seriesId, seriesId))
-
-  const selectedChars = selectedCharacterIds && selectedCharacterIds.length > 0
-    ? allCharacters.filter(c => selectedCharacterIds.includes(c.id))
-    : allCharacters
-
-  const unselectedChars = allCharacters.filter(c =>
-    !selectedCharacterIds || !selectedCharacterIds.includes(c.id)
+  const { selectedChars, unselectedChars, worldBible, canonEvents, ragCalls, ragContent, warnings } = await buildBaseContext(
+    seriesId, brief, rawParams, parentNovelId, useMaterials, materialIds, selectedCharacterIds, selectedTropeIds
   )
 
-  // 2. Brief 角色冲突检测
-  const warnings: string[] = []
-  const briefLower = brief.toLowerCase()
-  for (const char of unselectedChars) {
-    const names = [char.name.toLowerCase(), ...(char.aliases as string[] || []).map(a => a.toLowerCase())]
-    if (names.some(n => n.length >= 2 && briefLower.includes(n))) {
-      warnings.push(`Brief 中提到了未选中的角色"${char.name}"，是否将其加入参演角色？`)
-    }
-  }
-
-  // 3. 查询世界观和正史
-  const [worldBible] = await db
-    .select()
-    .from(worldBibles)
-    .where(eq(worldBibles.seriesId, seriesId))
-
-  const canonEvents = await db
-    .select()
-    .from(seriesCanon)
-    .where(eq(seriesCanon.seriesId, seriesId))
-    .orderBy(asc(seriesCanon.eventOrder))
-
-  // 4. Hybrid RAG 检索（带角色过滤标记）
-  // 预计算 brief 的 embedding，供向量检索和翻译记忆复用
-  let briefEmbedding: number[] | undefined
-  try {
-    briefEmbedding = await getEmbeddingWithCache(brief)
-  } catch {
-    // embedding 失败不影响主流程，后续检索会回退到内部计算
-  }
-
-  let ragContent = ""
-  const ragParts: string[] = []
-  const ragCalls: RagCall[] = []
-  const seenChunkIds = new Set<number>() // ← 用于 chunk 级别去重
-
-  const buildRagPrefix = (content: string): string => {
-    const containsUnselected = unselectedChars.some(c => {
-      const names = [c.name, ...(c.aliases as string[] || [])]
-      return names.some(n => content.includes(n))
-    })
-    return containsUnselected
-      ? "【⚠️ 以下素材含未授权角色，仅参考文风，切勿引入其中角色】\n"
-      : ""
-  }
-
-  // 各创作模式的 RAG limit
-  const ragConfig = MODE_RAG_CONFIG[mode]
-
-  // 4a. 从关联小说做向量检索
-  if (parentNovelId) {
-    const novelResults = await searchSimilar(brief, { novelId: parentNovelId, limit: ragConfig.novelStyleLimit, embedding: briefEmbedding })
-    if (novelResults.length > 0) {
-      const content = novelResults.map(r => r.enrichedContent || r.content).join("\n---\n")
-      ragParts.push(buildRagPrefix(content) + "【原作风格参考】\n" + content)
-      for (const r of novelResults) {
-        if (r.id) seenChunkIds.add(r.id)
-        ragCalls.push({
-          type: "novel_style",
-          content: r.enrichedContent || r.content,
-          score: r.similarity,
-          sourceTitle: r.sourceTitle,
-          chapterNumber: r.chapterNumber,
-          chunkIndex: r.chunkIndex,
-          totalChunks: r.totalChunks,
-          chunkId: r.id,
-        })
-      }
-    }
-  }
-
-  // 4b. 从素材池做向量检索
-  if (useMaterials !== false) {
-    const materialVecResults = await searchSimilar(brief, { seriesId, limit: ragConfig.materialLimit, materialIds: materialIds?.length ? materialIds : undefined, embedding: briefEmbedding })
-    if (materialVecResults.length > 0) {
-      const content = materialVecResults.map(r => r.enrichedContent || r.content).join("\n---\n")
-      ragParts.push(buildRagPrefix(content) + "【投喂素材参考】\n" + content)
-      for (const r of materialVecResults) {
-        if (r.id) seenChunkIds.add(r.id)
-        ragCalls.push({
-          type: "material",
-          content: r.enrichedContent || r.content,
-          score: r.similarity,
-          sourceTitle: r.sourceTitle,
-          chapterNumber: r.chapterNumber,
-          chunkIndex: r.chunkIndex,
-          totalChunks: r.totalChunks,
-          chunkId: r.id,
-        })
-      }
-    }
-  }
-
-  // 4c. 全文检索补充
-  try {
-    const briefQuery = brief.slice(0, 100)
-    const fullText = await db.execute(sql`
-      SELECT id, content,
-        ts_rank(to_tsvector('simple', content), plainto_tsquery('simple', ${briefQuery})) as score
-      FROM vector_chunks
-      WHERE series_id = ${seriesId}
-        AND to_tsvector('simple', content) @@ plainto_tsquery('simple', ${briefQuery})
-      ORDER BY score DESC
-      LIMIT ${ragConfig.keywordLimit}
-    `)
-    const ftRows = Array.isArray(fullText) ? fullText : []
-    const newFtRows = ftRows.filter((r: Record<string, unknown>) => !seenChunkIds.has(Number(r.id)))
-    if (newFtRows.length > 0) {
-      const ftContent = newFtRows.map((r: Record<string, unknown>) => String(r.content)).join("\n---\n")
-      ragParts.push(buildRagPrefix(ftContent) + "【关键词参考】\n" + ftContent)
-      for (const r of newFtRows) {
-        const cid = Number(r.id)
-        seenChunkIds.add(cid)
-        ragCalls.push({ type: "keyword", content: String(r.content), score: Number(r.score), chunkId: cid })
-      }
-    }
-  } catch { /* 全文检索可选，失败不影响主流程 */ }
-
-  // 4d. pg_trgm 模糊搜索补充（中文关键词匹配）
-  try {
-    const briefQuery = brief.slice(0, 100)
-    const trgmResults = await db.execute(sql`
-      SELECT id, content, similarity(content, ${briefQuery}) as score
-      FROM vector_chunks
-      WHERE series_id = ${seriesId}
-        AND content % ${briefQuery}
-      ORDER BY score DESC
-      LIMIT ${params.ragLimit}
-    `)
-    const trgmRows = Array.isArray(trgmResults) ? trgmResults : []
-    const newTrgmRows = trgmRows.filter((r: Record<string, unknown>) => !seenChunkIds.has(Number(r.id)))
-    if (newTrgmRows.length > 0) {
-      const trgmContent = newTrgmRows.map((r: Record<string, unknown>) => String(r.content)).join("\n---\n")
-      ragParts.push(buildRagPrefix(trgmContent) + "【模糊匹配参考】\n" + trgmContent)
-      for (const r of newTrgmRows) {
-        const cid = Number(r.id)
-        seenChunkIds.add(cid)
-        ragCalls.push({ type: "keyword", content: String(r.content), score: Number(r.score), chunkId: cid })
-      }
-    }
-  } catch { /* trgm 可选，失败不影响主流程 */ }
-
-  // 4e. 翻译记忆风格检索（当风格忠实度 >= 7 且有关联小说时）
-  if (params.styleFidelity >= 7 && parentNovelId && briefEmbedding) {
+  // 翻译记忆风格检索（当风格忠实度 >= 7 且有关联小说时）—— 仅 buildSystemPrompt 需要
+  let extendedRagContent = ragContent
+  let extendedRagCalls = ragCalls
+  if (params.styleFidelity >= 7 && parentNovelId) {
     try {
-      const embeddingJson = JSON.stringify(briefEmbedding)
-      const tmResults = await db.execute(sql`
-        SELECT source_text, translated_text,
-          1 - (embedding <=> ${embeddingJson}) as similarity
-        FROM translation_memory
-        WHERE novel_id = ${parentNovelId}
-        ORDER BY embedding <=> ${embeddingJson}
-        LIMIT 3
-      `)
-      const tmRows = Array.isArray(tmResults) ? tmResults : []
-      if (tmRows.length > 0) {
-        const tmContent = tmRows.map((r: Record<string, unknown>) =>
-          `原文: ${String(r.source_text).slice(0, 100)}\n译文: ${String(r.translated_text).slice(0, 150)}`
-        ).join("\n---\n")
+      let briefEmbedding: number[] | undefined
+      try {
+        briefEmbedding = await getEmbeddingWithCache(brief)
+      } catch {
+        // embedding 失败不影响主流程
+      }
+      if (briefEmbedding) {
+        const embeddingJson = JSON.stringify(briefEmbedding)
+        const tmResults = await db.execute(sql`
+          SELECT source_text, translated_text,
+            1 - (embedding <=> ${embeddingJson}) as similarity
+          FROM translation_memory
+          WHERE novel_id = ${parentNovelId}
+          ORDER BY embedding <=> ${embeddingJson}
+          LIMIT 3
+        `)
+        const tmRows = Array.isArray(tmResults) ? tmResults : []
+        if (tmRows.length > 0) {
+          const tmContent = tmRows.map((r: Record<string, unknown>) =>
+            `原文: ${String(r.source_text).slice(0, 100)}\n译文: ${String(r.translated_text).slice(0, 150)}`
+          ).join("\n---\n")
 
-        ragParts.push(
-          "【文风对照样本】以下是原作原文与译文的对应片段，" +
-          "请严格模仿其译文的句式节奏、用词风格和叙事口吻：\n" + tmContent
-        )
-        for (const r of tmRows) {
-          ragCalls.push({
-            type: "material",
-            content: `原文: ${String(r.source_text).slice(0, 100)}\n译文: ${String(r.translated_text).slice(0, 150)}`,
-            score: Number(r.similarity),
-            sourceTitle: "翻译记忆",
-          })
+          extendedRagContent = extendedRagContent
+            ? extendedRagContent + "\n\n【文风对照样本】以下是原作原文与译文的对应片段，请严格模仿其译文的句式节奏、用词风格和叙事口吻：\n" + tmContent
+            : "\n【文风对照样本】以下是原作原文与译文的对应片段，请严格模仿其译文的句式节奏、用词风格和叙事口吻：\n" + tmContent
+
+          for (const r of tmRows) {
+            extendedRagCalls.push({
+              type: "material",
+              content: `原文: ${String(r.source_text).slice(0, 100)}\n译文: ${String(r.translated_text).slice(0, 150)}`,
+              score: Number(r.similarity),
+              sourceTitle: "翻译记忆",
+            })
+          }
         }
       }
     } catch { /* 翻译记忆检索可选，失败不影响主流程 */ }
   }
 
-  // 5. RAG 结果 AI 摘要（将所有检索到的 chunks 提炼成连贯上下文）
-  if (ragCalls.length > 0) {
-    const ragSummary = await summarizeRagChunks(ragCalls)
-    if (ragSummary) {
-      ragContent = "\n【参考素材摘要】\n" + ragSummary
-    } else if (ragParts.length > 0) {
-      // fallback: 原始 chunks 拼接
-      ragContent = "\n" + ragParts.join("\n\n")
-    }
-  }
-
-  // 6. 辅助数据
+  // 辅助数据
   const lengthDesc: Record<string, string> = {
     short: "一个短场景，约 500-1000 字",
     chapter: "完整一章，约 2000-4000 字",
@@ -979,9 +877,9 @@ async function buildSystemPrompt(
   parts.push(buildStyleGuide(params.styleFidelity))
 
   // RAG 素材
-  if (ragContent) {
+  if (extendedRagContent) {
     parts.push("")
-    const useSummary = ragContent.includes("【参考素材摘要】")
+    const useSummary = extendedRagContent.includes("【参考素材摘要】")
     parts.push(useSummary
       ? "【参考素材使用规则】以下是从检索素材中提炼的参考上下文，已去除重复、按主题组织。仅供风格、语气和叙事节奏参考，严禁直接使用其情节或角色："
       : "【参考素材使用规则】以下检索到的素材仅供风格、语气和叙事节奏参考，严禁直接使用其情节或角色："
@@ -992,7 +890,7 @@ async function buildSystemPrompt(
     parts.push("4. 你的创作必须与【核心任务】高度相关，不要偏离主题")
     parts.push("")
     parts.push("===== 参考素材开始 =====")
-    parts.push(ragContent)
+    parts.push(extendedRagContent)
     parts.push("===== 参考素材结束 =====")
   }
 
@@ -1185,7 +1083,8 @@ export const generateRouter = createRouter({
             throw new Error("作品不属于当前系列")
           }
           if (workRecord?.outline) {
-            const outline = workRecord.outline as unknown as Outline
+            const parsed = safeParseOutline(workRecord.outline)
+            const outline = parsed.outline
             const parts: string[] = []
             if (outline.overview) {
               parts.push("【故事概述】" + outline.overview)
@@ -1391,7 +1290,7 @@ export const generateRouter = createRouter({
           .values({
             seriesId: input.seriesId,
             parentNovelId: input.parentNovelId || null,
-            title: `大纲_${new Date().toLocaleDateString()}`,
+            title: `大纲_${new Date().toISOString().slice(0, 10)}`,
             brief: input.brief,
             parameters: {
               ...input.parameters,
@@ -1410,7 +1309,7 @@ export const generateRouter = createRouter({
           })
           .returning()
 
-        completeProgress(taskId, { workId: work.id, title: work.title || "" })
+        completeProgress(taskId, { workId: work.id, title: work.title || "" }, 5)
 
         return {
           workId: work.id,
@@ -1467,7 +1366,8 @@ export const generateRouter = createRouter({
       // 续写时保留大纲约束
       let outlineSection = ""
       if (work.outline) {
-        const outline = work.outline as unknown as Outline
+        const parsed = safeParseOutline(work.outline)
+        const outline = parsed.outline
         const parts: string[] = []
         if (outline.overview) parts.push("【故事概述】" + outline.overview)
         if (outline.scenes?.length) {
@@ -1537,7 +1437,8 @@ export const generateRouter = createRouter({
       // 重写时保留大纲约束
       let outlineSection = ""
       if (work.outline) {
-        const outline = work.outline as unknown as Outline
+        const parsed = safeParseOutline(work.outline)
+        const outline = parsed.outline
         const parts: string[] = []
         if (outline.overview) parts.push("【故事概述】" + outline.overview)
         if (outline.scenes?.length) {

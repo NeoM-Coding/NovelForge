@@ -1560,8 +1560,11 @@ export default function Studio() {
                 <div className="flex items-center gap-2">
                   <button
                     onClick={() => {
-                      setUseOutlineMode(!useOutlineMode)
-                      setShowOutlinePanel(!useOutlineMode)
+                      setUseOutlineMode(prev => {
+                        const next = !prev
+                        setShowOutlinePanel(next)
+                        return next
+                      })
                     }}
                     className={`text-xs px-2 py-1 rounded-full transition-colors ${
                       useOutlineMode
