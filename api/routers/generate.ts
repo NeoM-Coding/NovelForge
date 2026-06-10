@@ -1,7 +1,7 @@
 import { z } from "zod"
 import { createRouter, publicQuery } from "../middleware"
 import { getDb } from "../queries/connection"
-import { characterCards, worldBibles, seriesCanon, fanFictionWorks, fanFictionChapters, plotTropes, novels, chapters, ragFeedback, generationJobs } from "@db/schema"
+import { characterCards, worldBibles, seriesCanon, fanFictionWorks, fanFictionChapters, plotTropes, novels, chapters, ragFeedback, generationJobs, materials, series } from "@db/schema"
 import { eq, asc, desc, sql } from "drizzle-orm"
 import { streamChat, chatCompletion } from "../services/deepseek"
 import { searchSimilar, getEmbeddingWithCache } from "../services/embedder"
@@ -149,6 +149,42 @@ function sanitizeGeneratedContent(text: string): string {
     }
   }
   return result
+}
+
+// 简单的 Web 搜索（DuckDuckGo Lite HTML，best-effort）
+async function webSearch(query: string, limit = 3): Promise<Array<{ title: string; snippet: string; url: string }>> {
+  try {
+    const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`
+    const response = await fetch(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        Accept: "text/html",
+        "Accept-Language": "zh-CN,zh;q=0.9",
+      },
+    })
+    if (!response.ok) return []
+    const html = await response.text()
+
+    const results: Array<{ title: string; snippet: string; url: string }> = []
+    const resultBlocks = html.split('<div class="result"')
+    for (let i = 1; i < resultBlocks.length && results.length < limit; i++) {
+      const block = resultBlocks[i]
+      const titleMatch = block.match(/<a[^>]*class="result__a"[^>]*>(.*?)\s*<\/a>/)
+      const snippetMatch = block.match(/<a[^>]*class="result__snippet"[^>]*>(.*?)\s*<\/a>/)
+      const urlMatch = block.match(/<a[^>]*class="result__a"[^>]*href="([^"]+)"/)
+      if (titleMatch) {
+        const cleanHtml = (s: string) => s.replace(/<[^>]+>/g, "").trim()
+        results.push({
+          title: cleanHtml(titleMatch[1]),
+          snippet: snippetMatch ? cleanHtml(snippetMatch[1]) : "",
+          url: urlMatch ? urlMatch[1] : "",
+        })
+      }
+    }
+    return results
+  } catch {
+    return []
+  }
 }
 
 // 生成参数 Schema
@@ -2184,6 +2220,120 @@ ${reviewText}
         strengths: Array.isArray(parsed?.strengths) ? (parsed?.strengths as unknown[]).map(String) : [],
         suggestions: Array.isArray(parsed?.suggestions) ? (parsed?.suggestions as unknown[]).map(String) : [],
         rawText: rawReview.slice(0, 2000), // 保留原始文本用于调试
+      }
+    }),
+
+  // 灵感激发：分析素材 + WebSearch 提供创作灵感
+  inspire: publicQuery
+    .input(z.object({
+      seriesId: z.number(),
+      brief: z.string().min(1),
+      materialIds: z.array(z.number()).optional(),
+      focus: z.enum(["plot", "character", "worldview", "writing", "full"]).default("full"),
+    }))
+    .mutation(async ({ input }) => {
+      const db = getDb()
+
+      // 读取系列信息
+      const [seriesRow] = await db.select().from(series).where(eq(series.id, input.seriesId))
+
+      // 读取素材
+      let materialTexts: string[] = []
+      if (input.materialIds && input.materialIds.length > 0) {
+        const mats = await db
+          .select()
+          .from(materials)
+          .where(sql`${materials.id} IN (${sql.join(input.materialIds, sql`, `)})`)
+        materialTexts = mats.map(m => `【${m.title}】\n${m.content?.slice(0, 800) || ""}`)
+      }
+
+      // Web 搜索（best-effort，失败不影响主流程）
+      const searchQuery = `${seriesRow?.name || ""} ${input.brief.slice(0, 50)} 小说 剧情 灵感`
+      const searchResults = await webSearch(searchQuery, 3)
+
+      const focusMap: Record<string, string> = {
+        plot: "情节方向（故事走向、冲突设计、悬念设置）",
+        character: "角色发展（人物弧光、关系演变、新角色引入）",
+        worldview: "世界观扩展（设定深挖、新区域、新规则）",
+        writing: "写作技巧（叙事手法、描写方式、节奏把控）",
+        full: "综合灵感（情节、角色、世界观、写作技巧）",
+      }
+
+      const prompt = `你是一位创意写作顾问。请根据以下信息，为用户提供具体的创作灵感建议。
+
+【系列名称】${seriesRow?.name || "未知"}
+【创作方向】${input.brief}
+【灵感焦点】${focusMap[input.focus] || focusMap.full}
+
+${materialTexts.length > 0 ? `【参考素材】\n${materialTexts.join("\n\n---\n\n")}` : ""}
+
+${searchResults.length > 0 ? `【网络检索参考】\n${searchResults.map((r, i) => `${i + 1}. ${r.title}\n${r.snippet}`).join("\n\n")}` : ""}
+
+请严格按以下 JSON 格式返回（不要包含 markdown 代码块标记）：
+{
+  "inspirations": [
+    {
+      "title": "灵感标题（10字以内）",
+      "category": "情节/角色/世界观/文笔",
+      "description": "具体灵感描述，包含可操作的创作方向",
+      "references": ["参考的素材或搜索结果序号"]
+    }
+  ],
+  "combinations": ["将多个素材元素组合的新颖建议"],
+  "trends": ["当前流行的相关创作趋势或梗"],
+  "warnings": ["需要注意的雷点或常见陷阱"]
+}`
+
+      const rawResponse = await chatCompletion({
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.9,
+        maxTokens: 4000,
+      })
+
+      // 解析 JSON
+      let parsed: Record<string, unknown> | null = null
+      try {
+        const cleaned = rawResponse.replace(/^```[a-z]*\s*|\s*```$/gim, "").trim()
+        parsed = JSON.parse(cleaned)
+      } catch {
+        const jsonMatch = rawResponse.match(/\{[\s\S]*\}/)
+        if (jsonMatch) {
+          try {
+            parsed = JSON.parse(jsonMatch[0])
+          } catch {
+            parsed = null
+          }
+        }
+      }
+
+      const safeArr = (val: unknown) => Array.isArray(val) ? (val as unknown[]).map(item => {
+        if (typeof item === "string") return item
+        if (typeof item === "object" && item !== null) {
+          const obj = item as Record<string, unknown>
+          return {
+            title: String(obj.title || ""),
+            category: String(obj.category || "其他"),
+            description: String(obj.description || ""),
+            references: Array.isArray(obj.references) ? (obj.references as unknown[]).map(String) : [],
+          }
+        }
+        return { title: "", category: "其他", description: "", references: [] }
+      }) : []
+
+      const inspirations = safeArr(parsed?.inspirations)
+      const combinations = Array.isArray(parsed?.combinations) ? (parsed?.combinations as unknown[]).map(String) : []
+      const trends = Array.isArray(parsed?.trends) ? (parsed?.trends as unknown[]).map(String) : []
+      const warnings = Array.isArray(parsed?.warnings) ? (parsed?.warnings as unknown[]).map(String) : []
+
+      return {
+        inspirations: inspirations.filter((i): i is { title: string; category: string; description: string; references: string[] } =>
+          typeof i === "object" && i !== null && "description" in i
+        ),
+        combinations,
+        trends,
+        warnings,
+        searchResults: searchResults.map(r => ({ title: r.title, snippet: r.snippet })),
+        rawText: rawResponse.slice(0, 2000),
       }
     }),
 })

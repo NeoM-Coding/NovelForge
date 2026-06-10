@@ -208,6 +208,20 @@ export default function Studio() {
   >(null)
   const [showReviewPanel, setShowReviewPanel] = useState(false)
 
+  // 灵感激发相关状态
+  const [inspireResult, setInspireResult] = useState<
+    | {
+        inspirations: Array<{ title: string; category: string; description: string; references: string[] }>
+        combinations: string[]
+        trends: string[]
+        warnings: string[]
+        searchResults: Array<{ title: string; snippet: string }>
+      }
+    | null
+  >(null)
+  const [showInspirePanel, setShowInspirePanel] = useState(false)
+  const [inspireFocus, setInspireFocus] = useState<"plot" | "character" | "worldview" | "writing" | "full">("full")
+
   // 大纲相关状态
   const [useOutlineMode, setUseOutlineMode] = useState(false)
   const [outlineType, setOutlineType] = useState<"overview" | "scenes" | "both">("both")
@@ -306,6 +320,7 @@ export default function Studio() {
   const batchMutation = trpc.generate.batch.useMutation()
   const exportMutation = trpc.generate.export.useMutation()
   const reviewMutation = trpc.generate.review.useMutation()
+  const inspireMutation = trpc.generate.inspire.useMutation()
 
   const [batchJobId, setBatchJobId] = useState(0)
   const [isBatchGenerating, setIsBatchGenerating] = useState(false)
@@ -491,6 +506,7 @@ export default function Studio() {
 
       // Esc：关闭弹窗（按优先级）
       if (e.key === "Escape") {
+        if (showInspirePanel) { setShowInspirePanel(false); return }
         if (showReviewPanel) { setShowReviewPanel(false); return }
         if (showRagPanel) { setShowRagPanel(false); return }
         if (showFeedbackDetail) { setShowFeedbackDetail(false); return }
@@ -523,7 +539,7 @@ export default function Studio() {
     }
     window.addEventListener("keydown", handleKeyDown)
     return () => window.removeEventListener("keydown", handleKeyDown)
-  }, [isGenerating, selectedSeriesId, brief, generatedWorkId, showReviewPanel, showRagPanel, showFeedbackDetail, showStyleSampleModal, useOutlineMode, outlineScenes.length])
+  }, [isGenerating, selectedSeriesId, brief, generatedWorkId, showInspirePanel, showReviewPanel, showRagPanel, showFeedbackDetail, showStyleSampleModal, useOutlineMode, outlineScenes.length])
 
   // 处理生成
   const handleGenerate = async () => {
@@ -859,6 +875,26 @@ export default function Studio() {
       const result = await reviewMutation.mutateAsync({ workId: generatedWorkId, focus })
       setReviewResult(result)
       setShowReviewPanel(true)
+    } catch (err) {
+      toast.error(String(err))
+    }
+  }
+
+  // 灵感激发
+  const handleInspire = async () => {
+    if (!selectedSeriesId || !brief.trim()) {
+      toast.error("请先选择系列并填写创作方向")
+      return
+    }
+    try {
+      const result = await inspireMutation.mutateAsync({
+        seriesId: selectedSeriesId,
+        brief: brief.trim(),
+        materialIds: selectedMaterialIds.length > 0 ? selectedMaterialIds : undefined,
+        focus: inspireFocus,
+      })
+      setInspireResult(result)
+      setShowInspirePanel(true)
     } catch (err) {
       toast.error(String(err))
     }
@@ -1682,6 +1718,28 @@ export default function Studio() {
                   })}
                 </div>
               )}
+              {/* 灵感激发按钮 */}
+              <div className="mt-3 flex items-center gap-2">
+                <button
+                  onClick={handleInspire}
+                  disabled={inspireMutation.isPending || !selectedSeriesId || !brief.trim()}
+                  className="flex items-center gap-2 px-4 py-1.5 rounded-full bg-cyan-500/20 hover:bg-cyan-500/30 disabled:opacity-30 text-cyan-400 text-sm transition-colors"
+                >
+                  <Wand2 className="w-3.5 h-3.5" />
+                  {inspireMutation.isPending ? "搜索灵感中..." : "获取灵感"}
+                </button>
+                <CustomSelect
+                  value={inspireFocus}
+                  onChange={(v) => setInspireFocus(v as typeof inspireFocus)}
+                  options={[
+                    { value: "full", label: "综合" },
+                    { value: "plot", label: "情节" },
+                    { value: "character", label: "角色" },
+                    { value: "worldview", label: "世界观" },
+                    { value: "writing", label: "文笔" },
+                  ]}
+                />
+              </div>
             </div>
 
             {/* 大纲面板 */}
@@ -2289,6 +2347,118 @@ export default function Studio() {
                       <li key={i} className="text-sm text-white/60 pl-4 relative before:content-['→'] before:absolute before:left-0 before:text-cyan-400">{s}</li>
                     ))}
                   </ul>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 灵感激发结果面板 */}
+      {showInspirePanel && inspireResult && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+          <div className="w-full max-w-2xl max-h-[85vh] flex flex-col rounded-2xl bg-[#1F2937] border border-white/10">
+            {/* 头部 */}
+            <div className="flex items-center justify-between px-6 pt-6 pb-4 shrink-0">
+              <div className="flex items-center gap-2">
+                <Wand2 className="w-5 h-5 text-cyan-400" />
+                <h3 className="font-serif text-lg font-semibold">创作灵感</h3>
+                {inspireResult.searchResults.length > 0 && (
+                  <span className="ml-2 text-[10px] text-white/40 font-mono">
+                    参考 {inspireResult.searchResults.length} 条网络结果
+                  </span>
+                )}
+              </div>
+              <button onClick={() => setShowInspirePanel(false)} className="p-1.5 rounded-lg hover:bg-white/10 transition-colors"><X className="w-4 h-4" /></button>
+            </div>
+            {/* 内容 */}
+            <div className="flex-1 overflow-y-auto px-6 pb-6 space-y-5">
+              {/* 灵感卡片 */}
+              {inspireResult.inspirations.length > 0 && (
+                <div className="space-y-3">
+                  <h4 className="text-sm font-medium text-white/70 flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-amber-400" /> 灵感建议
+                  </h4>
+                  {inspireResult.inspirations.map((ins, i) => (
+                    <div key={i} className="p-3 rounded-xl bg-white/5 border border-white/10 hover:border-cyan-500/30 transition-colors">
+                      <div className="flex items-center gap-2 mb-1.5">
+                        <span className="text-sm font-medium text-white/80">{ins.title || `灵感 ${i + 1}`}</span>
+                        <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
+                          ins.category === "情节" ? "bg-amber-500/20 text-amber-400" :
+                          ins.category === "角色" ? "bg-cyan-500/20 text-cyan-400" :
+                          ins.category === "世界观" ? "bg-purple-500/20 text-purple-400" :
+                          "bg-white/10 text-white/50"
+                        }`}>
+                          {ins.category}
+                        </span>
+                      </div>
+                      <p className="text-sm text-white/60 leading-relaxed">{ins.description}</p>
+                      {ins.references.length > 0 && (
+                        <div className="mt-1.5 flex flex-wrap gap-1">
+                          {ins.references.map((ref, j) => (
+                            <span key={j} className="text-[10px] text-white/30 font-mono">引用: {ref}</span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* 组合建议 */}
+              {inspireResult.combinations.length > 0 && (
+                <div>
+                  <h4 className="text-sm font-medium text-white/70 mb-2 flex items-center gap-1.5">
+                    <BookOpen className="w-3.5 h-3.5 text-emerald-400" /> 元素组合
+                  </h4>
+                  <ul className="space-y-1.5">
+                    {inspireResult.combinations.map((c, i) => (
+                      <li key={i} className="text-sm text-white/60 pl-4 relative before:content-['◆'] before:absolute before:left-0 before:text-emerald-400">{c}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* 趋势 */}
+              {inspireResult.trends.length > 0 && (
+                <div>
+                  <h4 className="text-sm font-medium text-white/70 mb-2 flex items-center gap-1.5">
+                    <Clock className="w-3.5 h-3.5 text-blue-400" /> 相关趋势
+                  </h4>
+                  <ul className="space-y-1.5">
+                    {inspireResult.trends.map((t, i) => (
+                      <li key={i} className="text-sm text-white/60 pl-4 relative before:content-['↗'] before:absolute before:left-0 before:text-blue-400">{t}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* 雷点警告 */}
+              {inspireResult.warnings.length > 0 && (
+                <div className="p-3 rounded-xl bg-red-500/5 border border-red-500/10">
+                  <h4 className="text-sm font-medium text-white/70 mb-2 flex items-center gap-1.5">
+                    <AlertCircle className="w-3.5 h-3.5 text-red-400" /> 需要注意
+                  </h4>
+                  <ul className="space-y-1">
+                    {inspireResult.warnings.map((w, i) => (
+                      <li key={i} className="text-sm text-white/50 pl-4 relative before:content-['!'] before:absolute before:left-0 before:text-red-400">{w}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* 网络搜索结果 */}
+              {inspireResult.searchResults.length > 0 && (
+                <div className="pt-3 border-t border-white/5">
+                  <h4 className="text-[10px] font-mono text-white/30 uppercase tracking-wider mb-2">网络参考来源</h4>
+                  <div className="space-y-2">
+                    {inspireResult.searchResults.map((r, i) => (
+                      <div key={i} className="text-xs text-white/40">
+                        <span className="text-white/50">{r.title}</span>
+                        <p className="text-white/30 mt-0.5 line-clamp-2">{r.snippet}</p>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
             </div>
