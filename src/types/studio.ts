@@ -93,5 +93,8 @@ export interface GenProgress {
 }
 
 export interface GenerationError {
+  type: "network" | "timeout" | "api_error" | "validation" | "cancelled" | "unknown"
   message: string
+  retryable: boolean
+  timestamp: number
 }

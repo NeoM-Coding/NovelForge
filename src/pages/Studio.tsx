@@ -129,6 +129,7 @@ export default function Studio() {
     content,
     displayContent,
     isGenerating,
+    cancelGeneration,
     brief,
     setBrief,
     title,
@@ -1351,23 +1352,26 @@ export default function Studio() {
 
             {/* 生成按钮 */}
             {!useOutlineMode && (
-              <button
-                onClick={handleGenerate}
-                disabled={isGenerating || !selectedSeriesId || !brief.trim()}
-                className="w-full py-3 bg-amber-500 hover:bg-amber-400 disabled:opacity-30 disabled:cursor-not-allowed text-[#111827] rounded-full font-medium text-sm transition-colors flex items-center justify-center gap-2"
-              >
+              <>
                 {isGenerating ? (
-                  <>
-                    <Sparkles className="w-4 h-4 animate-spin" />
-                    生成中...
-                  </>
+                  <button
+                    onClick={cancelGeneration}
+                    className="w-full py-3 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-full font-medium text-sm transition-colors flex items-center justify-center gap-2 animate-pulse"
+                  >
+                    <X className="w-4 h-4" />
+                    取消生成
+                  </button>
                 ) : (
-                  <>
+                  <button
+                    onClick={handleGenerate}
+                    disabled={!selectedSeriesId || !brief.trim()}
+                    className="w-full py-3 bg-amber-500 hover:bg-amber-400 disabled:opacity-30 disabled:cursor-not-allowed text-[#111827] rounded-full font-medium text-sm transition-colors flex items-center justify-center gap-2"
+                  >
                     <Wand2 className="w-4 h-4" />
                     开始创作
-                  </>
+                  </button>
                 )}
-              </button>
+              </>
             )}
 
             {/* 生成进度步骤条 */}

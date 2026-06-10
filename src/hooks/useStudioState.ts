@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react"
 import { useParams } from "react-router"
 import { trpc } from "@/providers/trpc"
 import { useToast } from "@/providers/toast"
+import { useGenerationCancel } from "./useGenerationCancel"
 import type {
   WritingMode,
   GenParams,
@@ -11,6 +12,7 @@ import type {
   InspireFocus,
   RagCall,
   GenProgress,
+  GenerationError,
 } from "@/types/studio"
 
 const DRAFT_KEY = "novelforge_studio_draft"
@@ -31,6 +33,7 @@ export function useStudioState() {
   const { workId } = useParams<{ workId: string }>()
   const utils = trpc.useUtils()
   const toast = useToast()
+  const { start: startCancel, cancel: cancelGeneration, isActive: isCancelling } = useGenerationCancel()
 
   // tRPC queries
   const { data: seriesList } = trpc.lore.series.list.useQuery()
@@ -130,6 +133,9 @@ export function useStudioState() {
   // 生成进度可视化
   const [genProgress, setGenProgress] = useState<GenProgress | null>(null)
   const progressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // 生成错误状态
+  const [generationError, setGenerationError] = useState<GenerationError | null>(null)
 
   // 生成 mutation
   const generateMutation = trpc.generate.fanfiction.useMutation({
@@ -445,11 +451,13 @@ export function useStudioState() {
       }
     }
 
+    const signal = startCancel()
     setIsGenerating(true)
     setContent("")
     setDisplayContent("")
     setFeedbackState(null)
     setShowFeedbackDetail(false)
+    setGenerationError(null)
 
     // 大纲模式下：先将用户编辑的大纲同步到数据库，再生成正文
     if (useOutlineMode && generatedWorkId) {
@@ -524,8 +532,25 @@ export function useStudioState() {
         setWarnings([])
       }
     } catch (error) {
-      console.error("Generation failed:", error)
-      setGenProgress(prev => prev ? { ...prev, message: "生成失败", completed: true } : null)
+      if (signal.aborted) {
+        toast.info("生成已取消")
+        setGenerationError({
+          type: "cancelled",
+          message: "生成已取消",
+          retryable: true,
+          timestamp: Date.now(),
+        })
+      } else {
+        console.error("Generation failed:", error)
+        setGenerationError({
+          type: "api_error",
+          message: error instanceof Error ? error.message : "生成失败",
+          retryable: true,
+          timestamp: Date.now(),
+        })
+        toast.error("生成失败")
+      }
+      setGenProgress(prev => prev ? { ...prev, message: signal.aborted ? "生成已取消" : "生成失败", completed: true } : null)
     } finally {
       setIsGenerating(false)
       if (progressIntervalRef.current) {
@@ -987,6 +1012,14 @@ export function useStudioState() {
     // 生成进度
     genProgress,
     setGenProgress,
+
+    // 生成取消
+    cancelGeneration,
+    isCancelling,
+
+    // 生成错误
+    generationError,
+    setGenerationError,
 
     // 批量生成
     batchJobId,
