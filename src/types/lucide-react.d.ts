@@ -67,4 +67,6 @@ declare module "lucide-react" {
   export const Theater: FC<LucideProps>
   export const Menu: FC<LucideProps>
   export const AlignJustify: FC<LucideProps>
+  export const WifiOff: FC<LucideProps>
+  export const ShieldAlert: FC<LucideProps>
 }

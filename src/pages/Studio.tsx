@@ -8,6 +8,7 @@ import {
   Loader2, X, AlertCircle, Theater, Trash2, Settings,
 } from "lucide-react"
 import { useStudioState } from "@/hooks/useStudioState"
+import { ErrorDisplay } from "@/components/studio/ErrorDisplay"
 import type { GenProgress } from "@/types/studio"
 
 const DEFAULT_STEPS = [
@@ -203,6 +204,10 @@ export default function Studio() {
 
     // Progress
     genProgress,
+
+    // Error
+    generationError,
+    setGenerationError,
 
     // Batch
     isBatchGenerating,
@@ -1378,6 +1383,16 @@ export default function Studio() {
             {genProgress && (
               <GenerationStepper progress={genProgress} steps={useOutlineMode ? OUTLINE_STEPS : DEFAULT_STEPS} />
             )}
+
+            {/* 错误展示 */}
+            <ErrorDisplay
+              error={generationError}
+              onRetry={() => {
+                setGenerationError(null)
+                handleGenerate()
+              }}
+              onDismiss={() => setGenerationError(null)}
+            />
           </div>
         </aside>
       </div>

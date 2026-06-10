@@ -137,6 +137,26 @@ export function useStudioState() {
   // 生成错误状态
   const [generationError, setGenerationError] = useState<GenerationError | null>(null)
 
+  // 错误分类函数
+  function classifyError(error: unknown): GenerationError {
+    if (error instanceof Error) {
+      if (error.name === "AbortError" || error.message.includes("aborted")) {
+        return { type: "cancelled", message: "生成已取消", retryable: true, timestamp: Date.now() }
+      }
+      if (error.message.includes("timeout") || error.message.includes("ETIMEDOUT")) {
+        return { type: "timeout", message: error.message, retryable: true, timestamp: Date.now() }
+      }
+      if (error.message.includes("network") || error.message.includes("fetch") || error.message.includes("ECONNREFUSED")) {
+        return { type: "network", message: error.message, retryable: true, timestamp: Date.now() }
+      }
+      if (error.message.includes("validation") || error.message.includes("required")) {
+        return { type: "validation", message: error.message, retryable: false, timestamp: Date.now() }
+      }
+      return { type: "api_error", message: error.message, retryable: true, timestamp: Date.now() }
+    }
+    return { type: "unknown", message: "未知错误", retryable: true, timestamp: Date.now() }
+  }
+
   // 生成 mutation
   const generateMutation = trpc.generate.fanfiction.useMutation({
     onSuccess: () => {
@@ -541,14 +561,10 @@ export function useStudioState() {
           timestamp: Date.now(),
         })
       } else {
+        const genError = classifyError(error)
         console.error("Generation failed:", error)
-        setGenerationError({
-          type: "api_error",
-          message: error instanceof Error ? error.message : "生成失败",
-          retryable: true,
-          timestamp: Date.now(),
-        })
-        toast.error("生成失败")
+        setGenerationError(genError)
+        toast.error(genError.message)
       }
       setGenProgress(prev => prev ? { ...prev, message: signal.aborted ? "生成已取消" : "生成失败", completed: true } : null)
     } finally {
