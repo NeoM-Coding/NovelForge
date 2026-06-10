@@ -169,19 +169,21 @@ export const batchChapterConfigSchema = z.object({
   brief: z.string().min(1),
 })
 
+export const generationParamsPartialSchema = z.object({
+  temperature: z.number().min(0).max(2).optional(),
+  styleFidelity: z.number().min(1).max(10).optional(),
+  characterLoyalty: z.number().min(1).max(10).optional(),
+  tone: z.string().optional(),
+  lengthTarget: z.enum(["short", "chapter", "arc"]).optional(),
+  canonConstraint: z.enum(["strict", "loose", "au"]).optional(),
+  writingMode: z.enum(["canon_continuation", "character_spinoff", "original_in_universe", "alternate_universe"]).optional(),
+  ragLimit: z.number().min(1).max(10).optional(),
+})
+
 export const batchGenerationSchema = z.object({
   workId: z.number(),
   chapterConfigs: z.array(batchChapterConfigSchema).min(1).max(50),
-  params: z.object({
-    temperature: z.number().min(0).max(2).optional(),
-    styleFidelity: z.number().min(1).max(10).optional(),
-    characterLoyalty: z.number().min(1).max(10).optional(),
-    tone: z.string().optional(),
-    lengthTarget: z.enum(["short", "chapter", "arc"]).optional(),
-    canonConstraint: z.enum(["strict", "loose", "au"]).optional(),
-    writingMode: z.enum(["canon_continuation", "character_spinoff", "original_in_universe", "alternate_universe"]).optional(),
-    ragLimit: z.number().min(1).max(10).optional(),
-  }).optional(),
+  params: generationParamsPartialSchema.optional(),
 })
 
 export type BatchChapterConfig = z.infer<typeof batchChapterConfigSchema>

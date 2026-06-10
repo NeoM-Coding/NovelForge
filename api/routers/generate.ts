@@ -112,16 +112,25 @@ async function generateSingleChapter(
 // 清洗 AI 生成内容中的元话语
 function sanitizeGeneratedContent(text: string): string {
   const patterns = [
-    /^(以下是[第\d]*章[：:]?\s*)/i,
-    /^(第[一二三四五六七八九十百千\d]+章[：:]?\s*)/i,
-    /^(本章[内容]*[：:]?\s*)/i,
-    /^(正文[：:]?\s*)/i,
+    /^(以下是[第\d]*章[：:]?\s*)/im,
+    /^(第[一二三四五六七八九十百千\d]+章[：:]?\s*)/im,
+    /^(本章[内容]*[：:]?\s*)/im,
+    /^(正文[：:]?\s*)/im,
+    /^\n+/, // leading newlines
   ]
   let result = text.trim()
-  for (const p of patterns) {
-    result = result.replace(p, "")
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const p of patterns) {
+      const newResult = result.replace(p, "")
+      if (newResult !== result) {
+        result = newResult.trim()
+        changed = true
+      }
+    }
   }
-  return result.trim()
+  return result
 }
 
 // 生成参数 Schema
@@ -1636,6 +1645,7 @@ export const generateRouter = createRouter({
           const outline = work.outline ? safeParseOutline(work.outline).outline : undefined
           const outlineSection = outline ? buildOutlineSection(outline) : undefined
 
+          let generatedCount = 0
           for (let i = 0; i < input.chapterConfigs.length; i++) {
             const config = input.chapterConfigs[i]
             const previousContext = await getPreviousContext(input.workId, config.chapterNumber)
@@ -1648,11 +1658,24 @@ export const generateRouter = createRouter({
 
             if (existing?.status === "generated") continue
 
+            const workParams = (work.parameters ?? {}) as Record<string, unknown>
             const { content } = await generateSingleChapter(
               input.workId, work.seriesId!, config.chapterNumber,
               config.title, config.brief, mergedParams,
-              { parentNovelId: work.parentNovelId ?? undefined, outlineSection, previousContext }
+              {
+                parentNovelId: work.parentNovelId ?? undefined,
+                userPrompt: workParams.userPrompt as string | undefined,
+                useMaterials: workParams.useMaterials as boolean | undefined,
+                materialIds: workParams.materialIds as number[] | undefined,
+                selectedCharacterIds: workParams.selectedCharacterIds as number[] | undefined,
+                selectedTropeIds: workParams.selectedTropeIds as number[] | undefined,
+                hotkeyTropeIds: workParams.hotkeyTropeIds as number[] | undefined,
+                outlineSection,
+                previousContext,
+              }
             )
+
+            generatedCount++
 
             if (existing) {
               await db.update(fanFictionChapters)
@@ -1668,7 +1691,7 @@ export const generateRouter = createRouter({
 
             await db.update(generationJobs)
               .set({
-                progress: ((i + 1) / input.chapterConfigs.length) * 100,
+                progress: (generatedCount / input.chapterConfigs.length) * 100,
                 metadata: {
                   workId: input.workId,
                   totalChapters: input.chapterConfigs.length,

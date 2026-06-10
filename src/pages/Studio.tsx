@@ -293,7 +293,7 @@ export default function Studio() {
 
   const batchStatusQuery = trpc.generate.batchStatus.useQuery(
     { jobId: batchJobId },
-    { enabled: batchJobId > 0, refetchInterval: 2000 }
+    { enabled: batchJobId > 0 && isBatchGenerating, refetchInterval: 2000 }
   )
 
   const listChaptersQuery = trpc.generate.listChapters.useQuery(
