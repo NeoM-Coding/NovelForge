@@ -1,6 +1,10 @@
 -- db/migrations/0001_add_indexes.sql
+-- 注意：生产环境大型表上建索引时，建议手动执行 CONCURRENTLY 版本：
+-- CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_xxx ON ...
+-- 本迁移文件使用普通 CREATE INDEX 以确保与 Drizzle 事务迁移兼容
+
 -- pgvector HNSW 索引（向量相似性搜索）
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_vector_chunks_embedding_hnsw
+CREATE INDEX IF NOT EXISTS idx_vector_chunks_embedding_hnsw
   ON vector_chunks USING hnsw (embedding vector_cosine_ops);
 
 -- 设置 HNSW 搜索精度（连接级别，建议放在应用启动时执行）
@@ -26,5 +30,5 @@ CREATE INDEX IF NOT EXISTS idx_translation_memory_series_id ON translation_memor
 CREATE INDEX IF NOT EXISTS idx_translation_memory_novel_id ON translation_memory (novel_id);
 
 -- pgvector HNSW 索引（translation_memory 向量相似性搜索）
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_translation_memory_embedding_hnsw
+CREATE INDEX IF NOT EXISTS idx_translation_memory_embedding_hnsw
   ON translation_memory USING hnsw (embedding vector_cosine_ops);
