@@ -21,8 +21,73 @@ export interface ChatOptions {
   model?: string
 }
 
+interface RetryConfig {
+  maxRetries?: number
+  baseDelayMs?: number
+  maxDelayMs?: number
+  retryableStatuses?: number[]
+}
+
+const DEFAULT_RETRY_CONFIG: Required<RetryConfig> = {
+  maxRetries: 3,
+  baseDelayMs: 1000,
+  maxDelayMs: 10000,
+  retryableStatuses: [429, 500, 502, 503, 504],
+}
+
+async function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+async function fetchWithRetry(
+  url: string,
+  init: RequestInit,
+  retryConfig: RetryConfig = {}
+): Promise<Response> {
+  const config = { ...DEFAULT_RETRY_CONFIG, ...retryConfig }
+  let lastError: Error | undefined
+
+  for (let attempt = 0; attempt <= config.maxRetries; attempt++) {
+    try {
+      const response = await fetch(url, init)
+
+      if (response.ok) {
+        return response
+      }
+
+      if (!config.retryableStatuses.includes(response.status)) {
+        return response
+      }
+
+      lastError = new Error(`DeepSeek API error: ${response.status}`)
+
+      if (attempt < config.maxRetries) {
+        const delay = Math.min(
+          config.baseDelayMs * Math.pow(2, attempt),
+          config.maxDelayMs
+        )
+        console.warn(`[fetchWithRetry] Attempt ${attempt + 1} failed with ${response.status}, retrying in ${delay}ms...`)
+        await sleep(delay)
+      }
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err))
+
+      if (attempt < config.maxRetries) {
+        const delay = Math.min(
+          config.baseDelayMs * Math.pow(2, attempt),
+          config.maxDelayMs
+        )
+        console.warn(`[fetchWithRetry] Attempt ${attempt + 1} network error, retrying in ${delay}ms...`)
+        await sleep(delay)
+      }
+    }
+  }
+
+  throw lastError || new Error("All retry attempts failed")
+}
+
 export async function* streamChat(options: ChatOptions) {
-  const response = await fetch(`${BASE_URL}/chat/completions`, {
+  const response = await fetchWithRetry(`${BASE_URL}/chat/completions`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -73,7 +138,7 @@ export async function* streamChat(options: ChatOptions) {
 }
 
 export async function chatCompletion(options: ChatOptions): Promise<string> {
-  const response = await fetch(`${BASE_URL}/chat/completions`, {
+  const response = await fetchWithRetry(`${BASE_URL}/chat/completions`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
