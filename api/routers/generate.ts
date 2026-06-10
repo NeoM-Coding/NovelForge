@@ -1,7 +1,7 @@
 import { z } from "zod"
 import { createRouter, publicQuery } from "../middleware"
 import { getDb } from "../queries/connection"
-import { characterCards, worldBibles, seriesCanon, fanFictionWorks, fanFictionChapters, plotTropes, novels, chapters, ragFeedback, generationJobs, materials, series } from "@db/schema"
+import { characterCards, worldBibles, seriesCanon, fanFictionWorks, fanFictionChapters, plotTropes, novels, chapters, ragFeedback, generationJobs, generationMetrics, materials, series } from "@db/schema"
 import { eq, asc, desc, sql } from "drizzle-orm"
 import { streamChat, chatCompletion } from "../services/deepseek"
 import { searchSimilar, getEmbeddingWithCache } from "../services/embedder"
@@ -89,43 +89,97 @@ async function generateSingleChapter(
     outlineSection?: string
     previousContext?: string
     worldBible?: typeof worldBibles.$inferSelect
+    jobId?: number
   }
 ): Promise<{ content: string; ragCalls: RagCall[]; warnings?: string[]; truncated?: string[] }> {
-  const { prompt, ragCalls, warnings, truncated } = await buildSystemPrompt(
-    seriesId,
-    chapterBrief,
-    params,
-    options.parentNovelId,
-    options.userPrompt,
-    options.useMaterials,
-    options.materialIds,
-    options.selectedCharacterIds,
-    options.selectedTropeIds,
-    options.hotkeyTropeIds,
-    options.outlineSection,
-    options.previousContext,
-  )
+  const startTime = Date.now()
+  let metricsId: number | undefined
+  const db = getDb()
 
-  const result = await chatCompletion({
-    messages: [
-      { role: "system", content: prompt },
-      { role: "user", content: `请创作第 ${chapterNumber} 章《${chapterTitle}》。要求：${chapterBrief}` },
-    ],
-    temperature: params.temperature ?? 0.8,
-    maxTokens: params.lengthTarget === "short" ? 4000 : params.lengthTarget === "arc" ? 12000 : 8000,
-  })
+  // 创建 metrics 记录
+  try {
+    const [metric] = await db.insert(generationMetrics).values({
+      jobId: options.jobId,
+      workId: _workId,
+      chapterNumber,
+      type: options.jobId ? "batch" : "single",
+      startedAt: new Date(),
+    }).returning()
+    metricsId = metric.id
+  } catch { /* ignore */ }
 
-  const content = sanitizeGeneratedContent(result.content)
+  try {
+    const { prompt, ragCalls, warnings, truncated } = await buildSystemPrompt(
+      seriesId,
+      chapterBrief,
+      params,
+      options.parentNovelId,
+      options.userPrompt,
+      options.useMaterials,
+      options.materialIds,
+      options.selectedCharacterIds,
+      options.selectedTropeIds,
+      options.hotkeyTropeIds,
+      options.outlineSection,
+      options.previousContext,
+    )
 
-  // 世界观一致性检查
-  if (options.worldBible) {
-    const { compliant, issues } = await verifyWorldViewCompliance(content, options.worldBible, seriesId)
-    if (!compliant && issues.length > 0) {
-      console.warn(`[WorldView] Chapter ${chapterNumber} issues:`, issues)
+    const result = await chatCompletion({
+      messages: [
+        { role: "system", content: prompt },
+        { role: "user", content: `请创作第 ${chapterNumber} 章《${chapterTitle}》。要求：${chapterBrief}` },
+      ],
+      temperature: params.temperature ?? 0.8,
+      maxTokens: params.lengthTarget === "short" ? 4000 : params.lengthTarget === "arc" ? 12000 : 8000,
+    })
+
+    const content = sanitizeGeneratedContent(result.content)
+
+    // 世界观一致性检查
+    let worldViewCompliant: boolean | undefined
+    if (options.worldBible) {
+      const { compliant, issues } = await verifyWorldViewCompliance(content, options.worldBible, seriesId)
+      worldViewCompliant = compliant
+      if (!compliant && issues.length > 0) {
+        console.warn(`[WorldView] Chapter ${chapterNumber} issues:`, issues)
+      }
     }
-  }
 
-  return { content, ragCalls, warnings, truncated }
+    // 成功时更新 metrics
+    if (metricsId) {
+      try {
+        await db.update(generationMetrics).set({
+          completedAt: new Date(),
+          durationMs: Date.now() - startTime,
+          promptTokens: result.usage?.promptTokens,
+          completionTokens: result.usage?.completionTokens,
+          totalTokens: result.usage?.totalTokens,
+          ragRecallCount: ragCalls.length,
+          ragTopSimilarity: ragCalls.length > 0 ? Math.max(...ragCalls.map(r => r.score || 0)) : undefined,
+          ragTruncated: !!truncated && truncated.length > 0,
+          worldViewCompliant,
+        }).where(eq(generationMetrics.id, metricsId))
+      } catch { /* ignore */ }
+    }
+
+    return { content, ragCalls, warnings, truncated }
+  } catch (err) {
+    // 失败时更新 metrics
+    if (metricsId) {
+      const errorType = err instanceof Error && err.message.includes("timeout") ? "timeout"
+        : err instanceof Error && err.message.includes("network") ? "network"
+        : "api_error"
+      try {
+        await db.update(generationMetrics).set({
+          completedAt: new Date(),
+          durationMs: Date.now() - startTime,
+          errorType,
+          errorMessage: err instanceof Error ? err.message : String(err),
+        }).where(eq(generationMetrics.id, metricsId))
+      } catch { /* ignore */ }
+    }
+    throw err
+  }
 }
 
 // 清洗 AI 生成内容中的元话语
@@ -1829,35 +1883,75 @@ export const generateRouter = createRouter({
                   return { status: "skipped" as const, config }
                 }
 
-                const { content } = await generateSingleChapter(
-                  workId,
-                  seriesId,
-                  config.chapterNumber,
-                  config.title,
-                  config.brief,
-                  mergedParams,
-                  { ...genOptions, previousContext },
-                )
-
-                // Upsert: update if exists, insert if not
+                // 设置章节状态为 generating
                 if (existing) {
                   await db
                     .update(fanFictionChapters)
-                    .set({ content, status: "generated", updatedAt: new Date() })
+                    .set({ status: "generating", updatedAt: new Date() })
                     .where(eq(fanFictionChapters.id, existing.id))
                 } else {
                   await db.insert(fanFictionChapters).values({
                     workId,
                     chapterNumber: config.chapterNumber,
                     title: config.title,
-                    content,
+                    content: "",
                     brief: config.brief,
                     parameters: mergedParams,
-                    status: "generated",
+                    status: "generating",
                   })
                 }
 
-                return { status: "fulfilled" as const, config }
+                try {
+                  const { content } = await generateSingleChapter(
+                    workId,
+                    seriesId,
+                    config.chapterNumber,
+                    config.title,
+                    config.brief,
+                    mergedParams,
+                    { ...genOptions, previousContext, jobId },
+                  )
+
+                  // 重新查询最新记录（可能在 generating 时插入了新记录）
+                  const [latest] = await db
+                    .select()
+                    .from(fanFictionChapters)
+                    .where(sql`${fanFictionChapters.workId} = ${workId} AND ${fanFictionChapters.chapterNumber} = ${config.chapterNumber}`)
+
+                  // Upsert: update if exists, insert if not
+                  if (latest) {
+                    await db
+                      .update(fanFictionChapters)
+                      .set({ content, status: "generated", updatedAt: new Date() })
+                      .where(eq(fanFictionChapters.id, latest.id))
+                  } else {
+                    await db.insert(fanFictionChapters).values({
+                      workId,
+                      chapterNumber: config.chapterNumber,
+                      title: config.title,
+                      content,
+                      brief: config.brief,
+                      parameters: mergedParams,
+                      status: "generated",
+                    })
+                  }
+
+                  return { status: "fulfilled" as const, config }
+                } catch (err) {
+                  // 生成失败，更新状态为 failed
+                  const [latest] = await db
+                    .select()
+                    .from(fanFictionChapters)
+                    .where(sql`${fanFictionChapters.workId} = ${workId} AND ${fanFictionChapters.chapterNumber} = ${config.chapterNumber}`)
+
+                  if (latest) {
+                    await db
+                      .update(fanFictionChapters)
+                      .set({ status: "failed", updatedAt: new Date() })
+                      .where(eq(fanFictionChapters.id, latest.id))
+                  }
+                  throw err
+                }
               })()
             )
 
@@ -2021,11 +2115,15 @@ export const generateRouter = createRouter({
           .orderBy(asc(fanFictionChapters.chapterNumber))
       }
 
+      const metadata = job.metadata as Record<string, unknown> | null
+      const failedChapters = metadata?.failedChapters as Array<{ chapterNumber: number; title: string; error: string }> | undefined
+
       return {
         jobId: job.id, status: job.status, progress: job.progress, errorLog: job.errorLog,
-        currentChapter: (job.metadata as Record<string, unknown>)?.currentChapter as number | undefined,
-        totalChapters: (job.metadata as Record<string, unknown>)?.totalChapters as number | undefined,
+        currentChapter: metadata?.currentChapter as number | undefined,
+        totalChapters: metadata?.totalChapters as number | undefined,
         completedChapters,
+        failedChapters,
       }
     }),
 
@@ -2037,6 +2135,84 @@ export const generateRouter = createRouter({
       if (!job) throw new Error("任务不存在")
       await db.delete(generationJobs).where(eq(generationJobs.id, input.jobId))
       return { message: "已重置，请重新调用 batch" }
+    }),
+
+  batchRetryChapter: publicQuery
+    .input(z.object({ workId: z.number(), chapterNumber: z.number() }))
+    .mutation(async ({ input }) => {
+      const db = getDb()
+
+      // 1. 验证 work 存在
+      const [work] = await db
+        .select()
+        .from(fanFictionWorks)
+        .where(eq(fanFictionWorks.id, input.workId))
+      if (!work) throw new Error("作品不存在")
+      if (!work.seriesId) throw new Error("作品未关联系列")
+
+      // 2. 验证 chapter 存在
+      const [chapter] = await db
+        .select()
+        .from(fanFictionChapters)
+        .where(sql`${fanFictionChapters.workId} = ${input.workId} AND ${fanFictionChapters.chapterNumber} = ${input.chapterNumber}`)
+      if (!chapter) throw new Error("章节不存在")
+
+      // 3. 从 work.parameters 中获取生成参数
+      const workParams = (work.parameters ?? {}) as Partial<GenParams>
+
+      // 4. 重新设置 chapter 状态为 generating
+      await db
+        .update(fanFictionChapters)
+        .set({ status: "generating", updatedAt: new Date() })
+        .where(eq(fanFictionChapters.id, chapter.id))
+
+      // 构建生成选项
+      const workRecordParams = (work.parameters ?? {}) as Record<string, unknown>
+      const outline = work.outline ? safeParseOutline(work.outline).outline : undefined
+      const outlineSection = outline ? buildOutlineSection(outline) : undefined
+
+      const genOptions = {
+        parentNovelId: work.parentNovelId ?? undefined,
+        userPrompt: workRecordParams.userPrompt as string | undefined,
+        useMaterials: workRecordParams.useMaterials as boolean | undefined,
+        materialIds: workRecordParams.materialIds as number[] | undefined,
+        selectedCharacterIds: workRecordParams.selectedCharacterIds as number[] | undefined,
+        selectedTropeIds: workRecordParams.selectedTropeIds as number[] | undefined,
+        hotkeyTropeIds: workRecordParams.hotkeyTropeIds as number[] | undefined,
+        outlineSection,
+        worldBible: undefined,
+      }
+
+      // 重新查询 previousContext
+      const previousContext = await getPreviousContext(input.workId, input.chapterNumber)
+
+      try {
+        // 5. 调用 generateSingleChapter 重新生成
+        const { content } = await generateSingleChapter(
+          input.workId,
+          work.seriesId!,
+          input.chapterNumber,
+          chapter.title || `第${input.chapterNumber}章`,
+          chapter.brief || "",
+          workParams,
+          { ...genOptions, previousContext },
+        )
+
+        // 6. 成功后 update 为 generated
+        await db
+          .update(fanFictionChapters)
+          .set({ content, status: "generated", updatedAt: new Date() })
+          .where(eq(fanFictionChapters.id, chapter.id))
+
+        return { success: true, chapterNumber: input.chapterNumber }
+      } catch (err) {
+        // 6. 失败后 update 为 failed
+        await db
+          .update(fanFictionChapters)
+          .set({ status: "failed", updatedAt: new Date() })
+          .where(eq(fanFictionChapters.id, chapter.id))
+        throw err
+      }
     }),
 
   export: publicQuery
