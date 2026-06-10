@@ -212,6 +212,10 @@ export default function Studio() {
     // Batch
     isBatchGenerating,
 
+    // Presearch
+    presearchResults,
+    isPresearching,
+
     // Feedback
     feedbackState,
     setFeedbackState,
@@ -876,6 +880,44 @@ export default function Studio() {
                     包含素材池中的投喂素材
                   </label>
                 </div>
+                {/* 预搜索结果 */}
+                {useMaterials && presearchResults.length > 0 && (
+                  <div className="p-2.5 rounded-lg bg-amber-500/5 border border-amber-500/10 mb-2">
+                    <p className="text-[10px] font-mono text-amber-400/70 mb-1.5 flex items-center gap-1">
+                      <Sparkles className="w-3 h-3" />
+                      根据 Brief 推荐素材
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {presearchResults.map(r => {
+                        const isSelected = selectedMaterialIds.includes(r.id)
+                        return (
+                          <button
+                            key={r.id}
+                            onClick={() => {
+                              setSelectedMaterialIds(prev =>
+                                isSelected ? prev.filter(id => id !== r.id) : [...prev, r.id]
+                              )
+                            }}
+                            className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] border transition-colors ${
+                              isSelected
+                                ? "bg-green-500/10 text-green-400 border-green-500/20"
+                                : "bg-amber-500/10 text-amber-400 border-amber-500/20 hover:bg-amber-500/20"
+                            }`}
+                          >
+                            {isSelected ? "✓" : "+"} {r.title}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+                {useMaterials && isPresearching && (
+                  <div className="flex items-center gap-2 text-[10px] text-white/30 mb-2">
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                    正在分析相关素材...
+                  </div>
+                )}
+
                 {useMaterials && seriesMaterials && seriesMaterials.length > 0 && (
                   <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
                     {seriesMaterials.map(m => (

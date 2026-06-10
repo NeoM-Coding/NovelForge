@@ -137,6 +137,10 @@ export function useStudioState() {
   // 生成错误状态
   const [generationError, setGenerationError] = useState<GenerationError | null>(null)
 
+  // 素材预搜索状态
+  const [presearchResults, setPresearchResults] = useState<Array<{ id: number; title: string; relevance: number }>>([])
+  const [isPresearching, setIsPresearching] = useState(false)
+
   // 错误分类函数
   function classifyError(error: unknown): GenerationError {
     if (error instanceof Error) {
@@ -156,6 +160,9 @@ export function useStudioState() {
     }
     return { type: "unknown", message: "未知错误", retryable: true, timestamp: Date.now() }
   }
+
+  // 素材预搜索 mutation
+  const presearchMutation = trpc.rag.presearchMaterials.useMutation()
 
   // 生成 mutation
   const generateMutation = trpc.generate.fanfiction.useMutation({
@@ -371,6 +378,31 @@ export function useStudioState() {
     }, 10000)
     return () => clearInterval(interval)
   }, [selectedSeriesId, selectedParentNovelId, title, brief, userPrompt, params, selectedCharacterIds, selectedTropeIds, selectedMaterialIds, content, generatedWorkId, useOutlineMode, outlineType, outlineOverview, outlineScenes])
+
+  // 素材预搜索：Brief 变化 800ms 后自动搜索相关素材
+  useEffect(() => {
+    if (!selectedSeriesId || !brief.trim() || brief.trim().length < 10) {
+      setPresearchResults([])
+      return
+    }
+    const timer = setTimeout(async () => {
+      setIsPresearching(true)
+      try {
+        const results = await presearchMutation.mutateAsync({
+          seriesId: selectedSeriesId,
+          query: brief.trim(),
+          limit: 5,
+        })
+        setPresearchResults(results)
+      } catch {
+        setPresearchResults([])
+      } finally {
+        setIsPresearching(false)
+      }
+    }, 800)
+    return () => clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [brief, selectedSeriesId])
 
   // 模拟流式显示效果
   useEffect(() => {
@@ -1036,6 +1068,10 @@ export function useStudioState() {
     // 生成错误
     generationError,
     setGenerationError,
+
+    // 素材预搜索
+    presearchResults,
+    isPresearching,
 
     // 批量生成
     batchJobId,

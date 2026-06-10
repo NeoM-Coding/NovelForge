@@ -69,6 +69,38 @@ export const ragRouter = createRouter({
       return result
     }),
 
+  // 素材预搜索 — 根据 Brief 推荐相关素材
+  presearchMaterials: publicQuery
+    .input(z.object({
+      seriesId: z.number(),
+      query: z.string().min(1),
+      limit: z.number().min(1).max(10).default(5),
+    }))
+    .mutation(async ({ input }) => {
+      const db = getDb()
+      const query = `%${input.query}%`
+      const results = await db.execute(sql`
+        SELECT id, title,
+          CASE
+            WHEN title ILIKE ${query} THEN 100
+            WHEN content ILIKE ${query} THEN 80
+            ELSE 50
+          END as relevance
+        FROM materials
+        WHERE series_id = ${input.seriesId}
+          AND status = 'indexed'
+          AND (title ILIKE ${query} OR content ILIKE ${query})
+        ORDER BY relevance DESC, created_at DESC
+        LIMIT ${input.limit}
+      `)
+      const rows = results as unknown as Array<{ id: number; title: string; relevance: number }>
+      return rows.map(r => ({
+        id: r.id,
+        title: r.title,
+        relevance: r.relevance,
+      }))
+    }),
+
   // RAG 效果反馈闭环 — 用户评分
   feedback: publicQuery
     .input(z.object({
