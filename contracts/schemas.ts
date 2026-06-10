@@ -161,3 +161,36 @@ export const outlineSchema = z.object({
 
 export type Outline = z.infer<typeof outlineSchema>
 export type OutlineScene = z.infer<typeof outlineSceneSchema>
+
+// 批量生成
+export const batchChapterConfigSchema = z.object({
+  chapterNumber: z.number().min(1),
+  title: z.string().min(1),
+  brief: z.string().min(1),
+})
+
+export const batchGenerationSchema = z.object({
+  workId: z.number(),
+  chapterConfigs: z.array(batchChapterConfigSchema).min(1).max(50),
+  params: z.object({
+    temperature: z.number().min(0).max(2).optional(),
+    styleFidelity: z.number().min(1).max(10).optional(),
+    characterLoyalty: z.number().min(1).max(10).optional(),
+    tone: z.string().optional(),
+    lengthTarget: z.enum(["short", "chapter", "arc"]).optional(),
+    canonConstraint: z.enum(["strict", "loose", "au"]).optional(),
+    writingMode: z.enum(["canon_continuation", "character_spinoff", "original_in_universe", "alternate_universe"]).optional(),
+    ragLimit: z.number().min(1).max(10).optional(),
+  }).optional(),
+})
+
+export type BatchChapterConfig = z.infer<typeof batchChapterConfigSchema>
+export type BatchGenerationInput = z.infer<typeof batchGenerationSchema>
+
+// 导出
+export const exportWorkSchema = z.object({
+  workId: z.number(),
+  format: z.enum(["txt", "markdown"]).default("txt"),
+})
+
+export type ExportWorkInput = z.infer<typeof exportWorkSchema>
