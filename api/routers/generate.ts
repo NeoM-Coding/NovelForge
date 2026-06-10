@@ -669,7 +669,8 @@ async function buildSystemPrompt(
   selectedCharacterIds?: number[],
   selectedTropeIds?: number[],
   hotkeyTropeIds?: number[],
-  outlineSection?: string
+  outlineSection?: string,
+  previousContext?: string,
 ): Promise<{ prompt: string; ragCalls: RagCall[]; warnings?: string[] }> {
   const params: GenParams = {
     temperature: rawParams.temperature ?? 0.8,
@@ -899,6 +900,15 @@ async function buildSystemPrompt(
     parts.push("")
     parts.push("【用户自定义要求】（以下内容优先级最高，请优先遵守）")
     parts.push(userPrompt.trim())
+  }
+
+  // 前文衔接（多章节连续生成时使用）
+  if (previousContext) {
+    parts.push(
+      "【前文衔接】\n" +
+      "以下是上一章的结尾部分，请确保本章内容在人物称谓、情节逻辑和语气上与此自然衔接。不要简单重复前文，而是以此为起点推进剧情：\n" +
+      previousContext.slice(-800)
+    )
   }
 
   parts.push("")
