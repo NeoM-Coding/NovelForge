@@ -96,6 +96,10 @@ async function fetchWithRetry(
       }
 
       if (err instanceof Error && err.name === "AbortError") {
+        // 外部取消优先，立即抛出
+        if (init.signal?.aborted) {
+          throw new Error("Request cancelled by caller")
+        }
         lastError = new Error(`Request timeout after ${config.timeoutMs}ms`)
         console.warn(`[fetchWithRetry] Attempt ${attempt + 1} timed out`)
       } else {
