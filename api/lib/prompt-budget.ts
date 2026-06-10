@@ -66,33 +66,43 @@ export function assemblePromptWithBudget(
 
   // 需要截断：从最低优先级开始
   const workingSections = orderedSections.map(s => ({ ...s }))
+  const TRUNCATION_MARKER_LENGTH = 30 // 预留截断标记长度
 
   for (let i = workingSections.length - 1; i >= 0; i--) {
     const section = workingSections[i]
 
-    // 核心任务（priority 0）和用户自定义（priority 7，但通常很短）不截断
+    // 核心任务和用户自定义不截断
     if (section.key === "coreTask" || section.key === "userPrompt") continue
 
     // RAG 部分有单独的更严格限制
     if (section.key === "rag" && section.content.length > config.ragMaxChars) {
       section.content = section.content.slice(0, config.ragMaxChars) +
         "\n\n[更多素材因长度限制被截断]"
-      truncated.push("rag")
+      if (!truncated.includes("rag")) truncated.push("rag")
+      totalLength = workingSections.reduce((sum, s) => sum + s.content.length, 0)
+      if (totalLength <= config.maxChars) break
     }
 
-    // 重新计算总长度
-    totalLength = workingSections.reduce((sum, s) => sum + s.content.length, 0)
-    if (totalLength <= config.maxChars) break
-
-    // 如果还是超限，继续截断下一个低优先级模块
-    if (section.content.length > 200) {
-      const targetLength = Math.max(200, section.content.length - (totalLength - config.maxChars))
+    // 通用截断（跳过已处理的 RAG，避免双重截断）
+    if (section.content.length > 200 + TRUNCATION_MARKER_LENGTH) {
+      const excess = totalLength - config.maxChars
+      const targetLength = Math.max(
+        200,
+        section.content.length - excess - TRUNCATION_MARKER_LENGTH
+      )
       section.content = section.content.slice(0, targetLength) +
         `\n\n[${section.key} 因长度限制被截断]`
-      if (!truncated.includes(section.key)) {
-        truncated.push(section.key)
-      }
+      if (!truncated.includes(section.key)) truncated.push(section.key)
+      totalLength = workingSections.reduce((sum, s) => sum + s.content.length, 0)
+      if (totalLength <= config.maxChars) break
     }
+  }
+
+  // 最终校验：如果仍超限且是 coreTask 导致，发出警告
+  const finalLength = workingSections.reduce((sum, s) => sum + s.content.length, 0)
+  const coreTaskSection = workingSections.find(s => s.key === "coreTask")
+  if (finalLength > config.maxChars && coreTaskSection && coreTaskSection.content.length > config.maxChars) {
+    console.warn(`[assemblePromptWithBudget] WARNING: coreTask 本身超过预算 (${coreTaskSection.content.length} > ${config.maxChars})，无法通过截断其他模块满足预算。`)
   }
 
   const prompt = workingSections.map(s => s.content).join("\n\n")
