@@ -26,6 +26,7 @@ interface RetryConfig {
   baseDelayMs?: number
   maxDelayMs?: number
   retryableStatuses?: number[]
+  timeoutMs?: number
 }
 
 const DEFAULT_RETRY_CONFIG: Required<RetryConfig> = {
@@ -33,6 +34,7 @@ const DEFAULT_RETRY_CONFIG: Required<RetryConfig> = {
   baseDelayMs: 1000,
   maxDelayMs: 10000,
   retryableStatuses: [429, 500, 502, 503, 504],
+  timeoutMs: 60000,
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -48,8 +50,16 @@ async function fetchWithRetry(
   let lastError: Error | undefined
 
   for (let attempt = 0; attempt <= config.maxRetries; attempt++) {
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), config.timeoutMs)
+
     try {
-      const response = await fetch(url, init)
+      const response = await fetch(url, {
+        ...init,
+        signal: controller.signal,
+      })
+
+      clearTimeout(timeoutId)
 
       if (response.ok) {
         return response
@@ -70,14 +80,21 @@ async function fetchWithRetry(
         await sleep(delay)
       }
     } catch (err) {
-      lastError = err instanceof Error ? err : new Error(String(err))
+      clearTimeout(timeoutId)
+
+      if (err instanceof Error && err.name === "AbortError") {
+        lastError = new Error(`Request timeout after ${config.timeoutMs}ms`)
+        console.warn(`[fetchWithRetry] Attempt ${attempt + 1} timed out`)
+      } else {
+        lastError = err instanceof Error ? err : new Error(String(err))
+        console.warn(`[fetchWithRetry] Attempt ${attempt + 1} network error: ${lastError.message}`)
+      }
 
       if (attempt < config.maxRetries) {
         const delay = Math.min(
           config.baseDelayMs * Math.pow(2, attempt),
           config.maxDelayMs
         )
-        console.warn(`[fetchWithRetry] Attempt ${attempt + 1} network error, retrying in ${delay}ms...`)
         await sleep(delay)
       }
     }
@@ -87,20 +104,24 @@ async function fetchWithRetry(
 }
 
 export async function* streamChat(options: ChatOptions) {
-  const response = await fetchWithRetry(`${BASE_URL}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${API_KEY}`,
+  const response = await fetchWithRetry(
+    `${BASE_URL}/chat/completions`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: options.model || "deepseek-v4-pro",
+        messages: options.messages,
+        temperature: options.temperature ?? 0.7,
+        max_tokens: options.maxTokens ?? 4000,
+        stream: true,
+      }),
     },
-    body: JSON.stringify({
-      model: options.model || "deepseek-v4-pro",
-      messages: options.messages,
-      temperature: options.temperature ?? 0.7,
-      max_tokens: options.maxTokens ?? 4000,
-      stream: true,
-    }),
-  })
+    { timeoutMs: 300000 }
+  )
 
   if (!response.ok || !response.body) {
     throw new Error(`DeepSeek API error: ${response.status}`)
