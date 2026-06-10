@@ -1831,18 +1831,33 @@ export default function Studio() {
                       {isBatchGenerating && batchStatusQuery.data && (
                         <div className="mt-3 space-y-2">
                           <div className="flex justify-between text-xs text-white/60">
-                            <span>批量生成进度</span>
-                            <span>{batchStatusQuery.data.progress?.toFixed(0) || 0}%</span>
+                            <span>
+                              {batchStatusQuery.data.currentChapter
+                                ? `正在生成第 ${batchStatusQuery.data.currentChapter} 章 / 共 ${batchStatusQuery.data.totalChapters || "?"} 章`
+                                : "批量生成进度"}
+                            </span>
+                            <span className="font-mono text-emerald-400">{batchStatusQuery.data.progress?.toFixed(0) || 0}%</span>
                           </div>
-                          <div className="h-1.5 bg-white/10 rounded-full overflow-hidden">
+                          <div className="h-2 bg-white/10 rounded-full overflow-hidden">
                             <div
-                              className="h-full bg-emerald-500 transition-all duration-500"
+                              className="h-full bg-gradient-to-r from-emerald-600 to-emerald-400 transition-all duration-700 relative"
                               style={{ width: `${batchStatusQuery.data.progress || 0}%` }}
-                            />
+                            >
+                              {batchStatusQuery.data.progress && batchStatusQuery.data.progress < 100 && (
+                                <div className="absolute inset-0 bg-white/20 animate-pulse" />
+                              )}
+                            </div>
                           </div>
                           {batchStatusQuery.data.completedChapters && batchStatusQuery.data.completedChapters.length > 0 && (
-                            <div className="text-xs text-white/40">
-                              已完成：{batchStatusQuery.data.completedChapters.map(c => `第${c.chapterNumber}章`).join("、")}
+                            <div className="flex flex-wrap gap-1.5">
+                              {batchStatusQuery.data.completedChapters.map(c => (
+                                <span
+                                  key={c.chapterNumber}
+                                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/20 text-[10px] text-emerald-400"
+                                >
+                                  ✓ 第{c.chapterNumber}章
+                                </span>
+                              ))}
                             </div>
                           )}
                         </div>
@@ -1850,17 +1865,38 @@ export default function Studio() {
 
                       {/* 已生成章节列表 */}
                       {listChaptersQuery.data && listChaptersQuery.data.length > 0 && (
-                        <div className="mt-4 space-y-1">
-                          <h4 className="text-xs font-medium text-white/50 uppercase tracking-wider">已生成章节</h4>
-                          <div className="max-h-40 overflow-y-auto space-y-1">
+                        <div className="mt-4 space-y-1.5">
+                          <div className="flex items-center justify-between">
+                            <h4 className="text-xs font-medium text-white/50 uppercase tracking-wider">已生成章节</h4>
+                            <span className="text-[10px] text-white/30 font-mono">
+                              共 {listChaptersQuery.data.length} 章 ·{" "}
+                              {listChaptersQuery.data.reduce((sum, ch) => sum + (ch.content?.length || 0), 0).toLocaleString()} 字
+                            </span>
+                          </div>
+                          <div className="max-h-48 overflow-y-auto space-y-1">
                             {listChaptersQuery.data.map(ch => (
                               <div
                                 key={ch.id}
-                                className="flex items-center gap-2 px-2 py-1.5 rounded bg-white/5 text-sm"
+                                className={`flex items-center gap-2 px-2.5 py-2 rounded-lg text-sm border ${
+                                  ch.status === "generated"
+                                    ? "bg-emerald-500/5 border-emerald-500/10"
+                                    : "bg-white/5 border-white/5"
+                                }`}
                               >
-                                <span className="text-amber-400 text-xs">第{ch.chapterNumber}章</span>
-                                <span className="text-white/80 truncate">{ch.title || "未命名"}</span>
-                                <span className="ml-auto text-xs text-white/30">{ch.status === "generated" ? "✓" : ch.status}</span>
+                                <span className="text-amber-400 text-xs font-mono w-12 shrink-0">第{ch.chapterNumber}章</span>
+                                <span className="text-white/80 truncate flex-1">{ch.title || "未命名"}</span>
+                                <span className="text-[10px] text-white/30 font-mono shrink-0">
+                                  {(ch.content?.length || 0).toLocaleString()} 字
+                                </span>
+                                <span
+                                  className={`ml-1 px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                                    ch.status === "generated"
+                                      ? "bg-emerald-500/20 text-emerald-400"
+                                      : "bg-white/10 text-white/40"
+                                  }`}
+                                >
+                                  {ch.status === "generated" ? "已完成" : ch.status}
+                                </span>
                               </div>
                             ))}
                           </div>
