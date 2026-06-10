@@ -184,6 +184,7 @@ export const batchGenerationSchema = z.object({
   workId: z.number(),
   chapterConfigs: z.array(batchChapterConfigSchema).min(1).max(50),
   params: generationParamsPartialSchema.optional(),
+  concurrency: z.number().min(1).max(5).optional().default(1),
 })
 
 export type BatchChapterConfig = z.infer<typeof batchChapterConfigSchema>

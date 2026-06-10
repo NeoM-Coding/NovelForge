@@ -1777,87 +1777,215 @@ export const generateRouter = createRouter({
         })
         .returning()
 
-      const runBatch = async () => {
+      const concurrency = input.concurrency ?? 1
+
+      const runBatch = async (
+        jobId: number,
+        workId: number,
+        seriesId: number,
+        chapterConfigs: typeof input.chapterConfigs,
+        mergedParams: Partial<GenParams>,
+        outlineSection: string | undefined,
+        concurrencyLimit: number,
+      ) => {
+        const failedChapters: Array<{ chapterNumber: number; title: string; error: string }> = []
+        let generatedCount = 0
+        let skippedCount = 0
+        const total = chapterConfigs.length
+
+        const workRecordParams = (work.parameters ?? {}) as Record<string, unknown>
+        const genOptions = {
+          parentNovelId: work.parentNovelId ?? undefined,
+          userPrompt: workRecordParams.userPrompt as string | undefined,
+          useMaterials: workRecordParams.useMaterials as boolean | undefined,
+          materialIds: workRecordParams.materialIds as number[] | undefined,
+          selectedCharacterIds: workRecordParams.selectedCharacterIds as number[] | undefined,
+          selectedTropeIds: workRecordParams.selectedTropeIds as number[] | undefined,
+          hotkeyTropeIds: workRecordParams.hotkeyTropeIds as number[] | undefined,
+          outlineSection,
+          worldBible: undefined,
+        }
+
         try {
-          const workParams = (work.parameters ?? {}) as Partial<GenParams>
-          const mergedParams = { ...workParams, ...input.params }
-          const outline = work.outline ? safeParseOutline(work.outline).outline : undefined
-          const outlineSection = outline ? buildOutlineSection(outline) : undefined
+          for (let i = 0; i < chapterConfigs.length; i += concurrencyLimit) {
+            const batchSlice = chapterConfigs.slice(i, i + concurrencyLimit)
 
-          let generatedCount = 0
-          for (let i = 0; i < input.chapterConfigs.length; i++) {
-            const config = input.chapterConfigs[i]
-            const previousContext = await getPreviousContext(input.workId, config.chapterNumber)
-
-            // Skip already-generated chapters (resume support)
-            const [existing] = await db
-              .select()
-              .from(fanFictionChapters)
-              .where(sql`${fanFictionChapters.workId} = ${input.workId} AND ${fanFictionChapters.chapterNumber} = ${config.chapterNumber}`)
-
-            if (existing?.status === "generated") continue
-
-            const workParams = (work.parameters ?? {}) as Record<string, unknown>
-            const { content } = await generateSingleChapter(
-              input.workId, work.seriesId!, config.chapterNumber,
-              config.title, config.brief, mergedParams,
-              {
-                parentNovelId: work.parentNovelId ?? undefined,
-                userPrompt: workParams.userPrompt as string | undefined,
-                useMaterials: workParams.useMaterials as boolean | undefined,
-                materialIds: workParams.materialIds as number[] | undefined,
-                selectedCharacterIds: workParams.selectedCharacterIds as number[] | undefined,
-                selectedTropeIds: workParams.selectedTropeIds as number[] | undefined,
-                hotkeyTropeIds: workParams.hotkeyTropeIds as number[] | undefined,
-                outlineSection,
-                previousContext,
-                worldBible: undefined,
-              }
+            // Pre-fetch existing chapters and previous context for the batch in parallel
+            const preflightResults = await Promise.all(
+              batchSlice.map(async (config) => {
+                const [existing] = await db
+                  .select()
+                  .from(fanFictionChapters)
+                  .where(sql`${fanFictionChapters.workId} = ${workId} AND ${fanFictionChapters.chapterNumber} = ${config.chapterNumber}`)
+                const previousContext = await getPreviousContext(workId, config.chapterNumber)
+                return { config, existing, previousContext }
+              })
             )
 
-            generatedCount++
+            const batchPromises = preflightResults.map(({ config, existing, previousContext }) =>
+              (async () => {
+                // Resume support: skip already-generated chapters
+                if (existing?.status === "generated") {
+                  skippedCount++
+                  return { status: "skipped" as const, config }
+                }
 
-            if (existing) {
-              await db.update(fanFictionChapters)
-                .set({ content, status: "generated", updatedAt: new Date() })
-                .where(eq(fanFictionChapters.id, existing.id))
-            } else {
-              await db.insert(fanFictionChapters).values({
-                workId: input.workId, chapterNumber: config.chapterNumber,
-                title: config.title, content, brief: config.brief,
-                parameters: mergedParams, status: "generated",
-              })
+                const { content } = await generateSingleChapter(
+                  workId,
+                  seriesId,
+                  config.chapterNumber,
+                  config.title,
+                  config.brief,
+                  mergedParams,
+                  { ...genOptions, previousContext },
+                )
+
+                // Upsert: update if exists, insert if not
+                if (existing) {
+                  await db
+                    .update(fanFictionChapters)
+                    .set({ content, status: "generated", updatedAt: new Date() })
+                    .where(eq(fanFictionChapters.id, existing.id))
+                } else {
+                  await db.insert(fanFictionChapters).values({
+                    workId,
+                    chapterNumber: config.chapterNumber,
+                    title: config.title,
+                    content,
+                    brief: config.brief,
+                    parameters: mergedParams,
+                    status: "generated",
+                  })
+                }
+
+                generatedCount++
+                return { status: "fulfilled" as const, config }
+              })()
+            )
+
+            const results = await Promise.allSettled(batchPromises)
+
+            for (let r = 0; r < results.length; r++) {
+              const result = results[r]
+              const config = batchSlice[r]
+              if (result.status === "rejected") {
+                failedChapters.push({
+                  chapterNumber: config.chapterNumber,
+                  title: config.title,
+                  error: String(result.reason),
+                })
+              }
             }
 
-            await db.update(generationJobs)
+            // Update progress after each batch
+            const processedCount = generatedCount + skippedCount + failedChapters.length
+            await db
+              .update(generationJobs)
               .set({
-                progress: (generatedCount / input.chapterConfigs.length) * 100,
+                progress: Math.round((processedCount / total) * 100),
                 metadata: {
-                  workId: input.workId,
-                  totalChapters: input.chapterConfigs.length,
-                  currentChapter: config.chapterNumber,
+                  workId,
+                  totalChapters: total,
+                  currentChapter: batchSlice[batchSlice.length - 1]?.chapterNumber ?? 0,
                   chapterConfigs: input.chapterConfigs,
                   params: input.params,
+                  failedChapters,
                 },
               })
-              .where(eq(generationJobs.id, job.id))
+              .where(eq(generationJobs.id, jobId))
           }
 
-          await db.update(generationJobs)
-            .set({ status: "completed", progress: 100 })
-            .where(eq(generationJobs.id, job.id))
+          // Determine final status
+          const successCount = generatedCount + skippedCount
+          if (successCount === 0) {
+            // All failed
+            await db
+              .update(generationJobs)
+              .set({
+                status: "failed",
+                progress: 100,
+                errorLog: `全部 ${total} 章生成失败：\n${failedChapters.map(f => `第${f.chapterNumber}章《${f.title}》：${f.error}`).join("\n")}`,
+                metadata: {
+                  workId,
+                  totalChapters: total,
+                  currentChapter: chapterConfigs[chapterConfigs.length - 1]?.chapterNumber ?? 0,
+                  chapterConfigs: input.chapterConfigs,
+                  params: input.params,
+                  failedChapters,
+                },
+              })
+              .where(eq(generationJobs.id, jobId))
+          } else if (failedChapters.length > 0) {
+            // Partial failure
+            await db
+              .update(generationJobs)
+              .set({
+                status: "completed",
+                progress: 100,
+                errorLog: `部分章节生成失败（${failedChapters.length}/${total}）：\n${failedChapters.map(f => `第${f.chapterNumber}章《${f.title}》：${f.error}`).join("\n")}`,
+                metadata: {
+                  workId,
+                  totalChapters: total,
+                  currentChapter: chapterConfigs[chapterConfigs.length - 1]?.chapterNumber ?? 0,
+                  chapterConfigs: input.chapterConfigs,
+                  params: input.params,
+                  failedChapters,
+                },
+              })
+              .where(eq(generationJobs.id, jobId))
 
-          await db.update(fanFictionWorks)
-            .set({ status: "completed" })
-            .where(eq(fanFictionWorks.id, input.workId))
+            await db
+              .update(fanFictionWorks)
+              .set({ status: "completed" })
+              .where(eq(fanFictionWorks.id, workId))
+          } else {
+            // All success
+            await db
+              .update(generationJobs)
+              .set({ status: "completed", progress: 100 })
+              .where(eq(generationJobs.id, jobId))
+
+            await db
+              .update(fanFictionWorks)
+              .set({ status: "completed" })
+              .where(eq(fanFictionWorks.id, workId))
+          }
         } catch (err) {
-          await db.update(generationJobs)
-            .set({ status: "failed", errorLog: String(err) })
-            .where(eq(generationJobs.id, job.id))
+          // Unexpected error in batch orchestration itself
+          await db
+            .update(generationJobs)
+            .set({
+              status: "failed",
+              errorLog: String(err),
+              metadata: {
+                workId,
+                totalChapters: total,
+                currentChapter: 0,
+                chapterConfigs: input.chapterConfigs,
+                params: input.params,
+                failedChapters,
+              },
+            })
+            .where(eq(generationJobs.id, jobId))
         }
       }
 
-      setImmediate(() => { runBatch().catch(console.error) })
+      const workParams = (work.parameters ?? {}) as Partial<GenParams>
+      const mergedParams = { ...workParams, ...input.params }
+      const outline = work.outline ? safeParseOutline(work.outline).outline : undefined
+      const outlineSection = outline ? buildOutlineSection(outline) : undefined
+
+      setImmediate(() => {
+        runBatch(
+          job.id,
+          input.workId,
+          work.seriesId!,
+          input.chapterConfigs,
+          mergedParams,
+          outlineSection,
+          concurrency,
+        ).catch(console.error)
+      })
 
       return { jobId: job.id }
     }),
