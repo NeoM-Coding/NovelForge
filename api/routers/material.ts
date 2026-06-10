@@ -930,7 +930,7 @@ ${content}`
   // 批量自动提取（异步后台处理，避免504超时）
   batchAutoExtract: publicQuery
     .input(z.object({
-      materialIds: z.array(z.number()).max(20, "一次最多处理20条素材"),
+      materialIds: z.array(z.number()).max(200, "一次最多处理200条素材"),
       seriesId: z.number(),
     }))
     .mutation(async ({ input }) => {
