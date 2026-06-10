@@ -6,6 +6,7 @@ import { eq, asc, desc, sql } from "drizzle-orm"
 import { streamChat, chatCompletion } from "../services/deepseek"
 import { searchSimilar, getEmbeddingWithCache } from "../services/embedder"
 import { outlineSchema, type Outline, batchGenerationSchema, exportWorkSchema } from "@contracts/schemas"
+import { assemblePromptWithBudget } from "../lib/prompt-budget"
 
 const WRITING_MODES = [
   "canon_continuation",
@@ -943,7 +944,8 @@ async function buildSystemPrompt(
   }
 
   // ========== 组装 System Prompt（按注意力权重排序：核心任务 → 角色规则 → 世界观 → 其他）==========
-  const parts: string[] = [
+  // 先收集各模块内容
+  const coreTaskParts: string[] = [
     `你是一位精通中文创作的小说家。当前创作模式：${MODE_CONFIG[mode].name}。请严格根据以下设定进行创作，输出必须是中文小说正文。`,
     "",
     "========== 核心任务（最高优先级）==========",
@@ -956,32 +958,38 @@ async function buildSystemPrompt(
     ] : []),
     `\n长度要求：${lengthDesc[params.lengthTarget]}`,
     `氛围要求：${toneMap[params.tone] || params.tone}`,
-    "",
-    buildWorldViewSection(worldBible),
-    "",
-    MODE_CONFIG[mode].worldViewConstraint,
-    "",
+  ]
+
+  const worldViewParts: string[] = []
+  const worldViewSection = buildWorldViewSection(worldBible)
+  if (worldViewSection) {
+    worldViewParts.push(worldViewSection)
+  }
+  worldViewParts.push(MODE_CONFIG[mode].worldViewConstraint)
+
+  const charactersParts: string[] = [
     "========== 角色规则 ==========",
     MODE_CONFIG[mode].characterInstruction,
   ]
 
   // 选中角色设定卡
   if (selectedChars.length > 0) {
-    parts.push("")
-    parts.push("【授权角色 — 仅允许使用以下角色】")
+    charactersParts.push("")
+    charactersParts.push("【授权角色 — 仅允许使用以下角色】")
     for (const char of selectedChars) {
       const traits = (char.personalityTraits as string[] || []).join("、") || "无性格标签"
       const taboos = (char.taboos as string[] || []).join("、")
-      parts.push(`- ${char.name}: ${traits}${taboos ? ` | 禁忌: ${taboos}` : ""}${char.speechPatterns ? ` | 语言风格: ${char.speechPatterns}` : ""}`)
+      charactersParts.push(`- ${char.name}: ${traits}${taboos ? ` | 禁忌: ${taboos}` : ""}${char.speechPatterns ? ` | 语言风格: ${char.speechPatterns}` : ""}`)
     }
   }
 
   // 禁止角色列表
   if (forbiddenList) {
-    parts.push(forbiddenList)
+    charactersParts.push(forbiddenList)
   }
 
-  // 7. 桥段（Trope）注入 — 用户选择 + 热key推荐
+  // 桥段（Trope）注入 — 用户选择 + 热key推荐
+  const tropesParts: string[] = []
   const allTropeIds = new Set([
     ...(selectedTropeIds || []),
     ...(hotkeyTropeIds || []),
@@ -997,116 +1005,108 @@ async function buildSystemPrompt(
     )
 
     if (selectedTropes.length > 0 || hotkeyTropes.length > 0) {
-      parts.push("")
-      parts.push("【参考桥段 — 可借鉴的情节模式】")
+      tropesParts.push("【参考桥段 — 可借鉴的情节模式】")
 
       if (selectedTropes.length > 0) {
-        parts.push("以下是你本次明确选择的桥段，供你参考其结构、节奏和情感转折方式：")
+        tropesParts.push("以下是你本次明确选择的桥段，供你参考其结构、节奏和情感转折方式：")
         for (const trope of selectedTropes) {
-          parts.push(`\n「${trope.name}」`)
-          if (trope.description) parts.push(`  描述: ${trope.description}`)
-          if (trope.pattern) parts.push(`  流程: ${trope.pattern}`)
+          tropesParts.push(`\n「${trope.name}」`)
+          if (trope.description) tropesParts.push(`  描述: ${trope.description}`)
+          if (trope.pattern) tropesParts.push(`  流程: ${trope.pattern}`)
           const exs = (trope.examples as string[] || [])
           if (exs.length > 0) {
-            parts.push(`  素材佐证:`)
+            tropesParts.push(`  素材佐证:`)
             for (const ex of exs.slice(0, 2)) {
-              parts.push(`    - ${ex.slice(0, 120)}${ex.length > 120 ? "..." : ""}`)
+              tropesParts.push(`    - ${ex.slice(0, 120)}${ex.length > 120 ? "..." : ""}`)
             }
           }
         }
       }
 
       if (hotkeyTropes.length > 0) {
-        parts.push("\n以下是你历史创作中高频使用的桥段（热键推荐），建议自然融入创作：")
+        tropesParts.push("\n以下是你历史创作中高频使用的桥段（热键推荐），建议自然融入创作：")
         for (const trope of hotkeyTropes) {
-          parts.push(`\n🔥「${trope.name}」（常用桥段）`)
-          if (trope.description) parts.push(`  描述: ${trope.description}`)
-          if (trope.pattern) parts.push(`  流程: ${trope.pattern}`)
+          tropesParts.push(`\n🔥「${trope.name}」（常用桥段）`)
+          if (trope.description) tropesParts.push(`  描述: ${trope.description}`)
+          if (trope.pattern) tropesParts.push(`  流程: ${trope.pattern}`)
           const exs = (trope.examples as string[] || [])
           if (exs.length > 0) {
-            parts.push(`  素材佐证:`)
+            tropesParts.push(`  素材佐证:`)
             for (const ex of exs.slice(0, 2)) {
-              parts.push(`    - ${ex.slice(0, 120)}${ex.length > 120 ? "..." : ""}`)
+              tropesParts.push(`    - ${ex.slice(0, 120)}${ex.length > 120 ? "..." : ""}`)
             }
           }
         }
       }
 
-      parts.push("\n【桥段使用规则】")
-      parts.push("1. 借鉴桥段的情节结构和情感节奏，不要照搬具体情节")
-      parts.push("2. 桥段中的角色名、地点、对话必须替换为你自己的创作")
-      parts.push("3. 多个桥段可以融合使用，创造出新的变体")
-      parts.push("4. 热键推荐桥段是你过往创作的习惯模式，可适当融入以增强个人风格")
+      tropesParts.push("\n【桥段使用规则】")
+      tropesParts.push("1. 借鉴桥段的情节结构和情感节奏，不要照搬具体情节")
+      tropesParts.push("2. 桥段中的角色名、地点、对话必须替换为你自己的创作")
+      tropesParts.push("3. 多个桥段可以融合使用，创造出新的变体")
+      tropesParts.push("4. 热键推荐桥段是你过往创作的习惯模式，可适当融入以增强个人风格")
     }
   }
 
   // 纯原创强化声明（同世界观原创 + 未选择任何已有角色时）
   if (mode === "original_in_universe" && selectedChars.length === 0) {
-    parts.push("")
-    parts.push("【纯原创强化声明 — 最高优先级】")
-    parts.push("用户明确要求：在同世界观下创作一个完全全新的故事，不使用任何已有角色。")
-    parts.push("请严格遵守以下规则（违反任何一条均为严重错误）：")
-    parts.push("1. 故事中的所有角色（主角、配角、龙套、NPC）必须是原创的，拥有全新的姓名")
-    parts.push("2. 禁止在任何场景中以任何形式提及已有角色的真实姓名——包括对话、回忆、旁白、书信、传说、历史记载")
-    parts.push("3. 禁止将已有角色的性格、外貌、能力、口头禅、标志性物品移植到新角色身上")
-    parts.push("4. 禁止以'上古大能'、'历史传说'、'前辈高人'等名义间接引用已有角色")
-    parts.push("5. 世界观设定（力量体系、地理、文化）可以沿用，但角色和剧情必须是全新的")
-    parts.push("6. 如果 Brief 中没有明确点名某个已有角色，则默认该角色不存在于本故事中")
+    tropesParts.push("【纯原创强化声明 — 最高优先级】")
+    tropesParts.push("用户明确要求：在同世界观下创作一个完全全新的故事，不使用任何已有角色。")
+    tropesParts.push("请严格遵守以下规则（违反任何一条均为严重错误）：")
+    tropesParts.push("1. 故事中的所有角色（主角、配角、龙套、NPC）必须是原创的，拥有全新的姓名")
+    tropesParts.push("2. 禁止在任何场景中以任何形式提及已有角色的真实姓名——包括对话、回忆、旁白、书信、传说、历史记载")
+    tropesParts.push("3. 禁止将已有角色的性格、外貌、能力、口头禅、标志性物品移植到新角色身上")
+    tropesParts.push("4. 禁止以'上古大能'、'历史传说'、'前辈高人'等名义间接引用已有角色")
+    tropesParts.push("5. 世界观设定（力量体系、地理、文化）可以沿用，但角色和剧情必须是全新的")
+    tropesParts.push("6. 如果 Brief 中没有明确点名某个已有角色，则默认该角色不存在于本故事中")
   }
 
   // 正史
-  if (canonEvents.length > 0) {
-    parts.push(buildCanonSection(canonEvents, mode))
-  }
+  const canonSection = canonEvents.length > 0 ? buildCanonSection(canonEvents, mode) : ""
 
   // 文风指导
-  parts.push("")
-  parts.push(buildStyleGuide(params.styleFidelity))
+  const styleGuideSection = buildStyleGuide(params.styleFidelity)
 
   // RAG 素材
+  const ragParts: string[] = []
   if (extendedRagContent) {
-    parts.push("")
     const useSummary = extendedRagContent.includes("【参考素材摘要】")
-    parts.push(useSummary
+    ragParts.push(useSummary
       ? "【参考素材使用规则】以下是从检索素材中提炼的参考上下文，已去除重复、按主题组织。仅供风格、语气和叙事节奏参考，严禁直接使用其情节或角色："
       : "【参考素材使用规则】以下检索到的素材仅供风格、语气和叙事节奏参考，严禁直接使用其情节或角色："
     )
-    parts.push("1. 禁止直接复制素材中的情节、对话或场景")
-    parts.push("2. 禁止强行将素材内容插入到你的创作中")
-    parts.push("3. 仅借鉴其语言风格、描写方式和节奏感")
-    parts.push("4. 你的创作必须与【核心任务】高度相关，不要偏离主题")
-    parts.push("")
-    parts.push("===== 参考素材开始 =====")
-    parts.push(extendedRagContent)
-    parts.push("===== 参考素材结束 =====")
+    ragParts.push("1. 禁止直接复制素材中的情节、对话或场景")
+    ragParts.push("2. 禁止强行将素材内容插入到你的创作中")
+    ragParts.push("3. 仅借鉴其语言风格、描写方式和节奏感")
+    ragParts.push("4. 你的创作必须与【核心任务】高度相关，不要偏离主题")
+    ragParts.push("")
+    ragParts.push("===== 参考素材开始 =====")
+    ragParts.push(extendedRagContent)
+    ragParts.push("===== 参考素材结束 =====")
   }
 
   // 用户自定义
-  if (userPrompt && userPrompt.trim()) {
-    parts.push("")
-    parts.push("【用户自定义要求】（以下内容优先级最高，请优先遵守）")
-    parts.push(userPrompt.trim())
-  }
+  const userPromptSection = userPrompt?.trim() || ""
 
   // 前文衔接（多章节连续生成时使用）
-  if (previousContext) {
-    parts.push(
-      "【前文衔接】\n" +
+  const previousContextSection = previousContext
+    ? "【前文衔接】\n" +
       "以下是上一章的结尾部分，请确保本章内容在人物称谓、情节逻辑和语气上与此自然衔接。不要简单重复前文，而是以此为起点推进剧情：\n" +
       previousContext.slice(-800)
-    )
-  }
+    : ""
 
-  parts.push("")
-  parts.push("========== 输出格式要求 ==========")
-  parts.push("- 使用标准中文小说排版（段落分明、对话用引号）")
-  parts.push("- 不要使用 Markdown 标记")
-  parts.push("- 直接输出正文，不要添加额外说明")
-  parts.push("- 禁止输出'第X章'等章节标题，直接输出正文内容")
+  // 输出格式要求（固定尾部，也作为 coreTask 的一部分）
+  const outputFormatParts: string[] = [
+    "",
+    "========== 输出格式要求 ==========",
+    "- 使用标准中文小说排版（段落分明、对话用引号）",
+    "- 不要使用 Markdown 标记",
+    "- 直接输出正文，不要添加额外说明",
+    "- 禁止输出'第X章'等章节标题，直接输出正文内容",
+  ]
   if (forbiddenList) {
-    parts.push("- 绝对禁止【严禁出场的角色】中列出的任何角色以任何形式出现")
+    outputFormatParts.push("- 绝对禁止【严禁出场的角色】中列出的任何角色以任何形式出现")
   }
-  parts.push("" +
+  outputFormatParts.push("" +
     "【世界观自检清单】在输出每一段内容前，请在心中快速检查：\n" +
     "1. 本段是否使用了未在设定中出现过的力量/科技？\n" +
     "2. 角色的能力表现是否超出了设定中的能力边界？\n" +
@@ -1115,7 +1115,31 @@ async function buildSystemPrompt(
     "【强制规则】绝对禁止输出'世界观自检清单'本身，只需在心中完成检查并输出修正后的正文。"
   )
 
-  return { prompt: parts.join("\n"), ragCalls, warnings: warnings.length > 0 ? warnings : undefined }
+  // 合并 coreTask（包含输出格式要求，因为输出格式是核心约束）
+  coreTaskParts.push(...outputFormatParts)
+  if (previousContextSection) {
+    coreTaskParts.push(previousContextSection)
+  }
+
+  // 使用预算管理器组装 prompt
+  const sections = {
+    coreTask: coreTaskParts.join("\n"),
+    worldView: worldViewParts.join("\n"),
+    characters: charactersParts.join("\n"),
+    tropes: tropesParts.join("\n"),
+    canon: canonSection,
+    styleGuide: styleGuideSection,
+    rag: ragParts.join("\n"),
+    userPrompt: userPromptSection,
+  }
+
+  const { prompt, truncated } = assemblePromptWithBudget(sections)
+
+  if (truncated.length > 0) {
+    console.warn(`[buildSystemPrompt] 截断了 ${truncated.length} 个模块: ${truncated.join(", ")}`)
+  }
+
+  return { prompt, ragCalls: extendedRagCalls, warnings: warnings.length > 0 ? warnings : undefined }
 }
 
 // 辅助：查询用户历史高频使用的桥段（热键）
