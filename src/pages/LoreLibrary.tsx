@@ -284,6 +284,7 @@ export default function LoreLibrary() {
       setShowExtractProgress(true)
     },
   })
+  const extractCancelMutation = trpc.trope.extractCancel.useMutation()
 
   // 轮询提取任务状态
   const { data: extractStatusData } = trpc.trope.extractStatus.useQuery(
@@ -1726,7 +1727,14 @@ export default function LoreLibrary() {
           <div className="w-full max-w-md p-6 rounded-2xl bg-[#1F2937] border border-white/10">
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-serif text-lg font-semibold">AI 提取桥段</h3>
-              <button onClick={() => { setShowTropeExtract(false); setSelectedMaterialIdsForExtract([]); }} className="p-1 rounded hover:bg-white/10"><X className="w-4 h-4" /></button>
+              <button onClick={() => {
+                // 如果任务正在运行，发送取消请求
+                if (extractTaskId && showExtractProgress) {
+                  extractCancelMutation.mutate({ taskId: extractTaskId })
+                }
+                setShowTropeExtract(false)
+                setSelectedMaterialIdsForExtract([])
+              }} className="p-1 rounded hover:bg-white/10"><X className="w-4 h-4" /></button>
             </div>
             <p className="text-sm text-white/60 mb-4">
               将从该系列的 RAG 素材中自动提取典型桥段。素材越多，提取效果越好。
@@ -1770,7 +1778,13 @@ export default function LoreLibrary() {
                 <Sparkles className="w-4 h-4" /> 开始提取
               </button>
               <button
-                onClick={() => { setShowTropeExtract(false); setSelectedMaterialIdsForExtract([]); }}
+                onClick={() => {
+                  if (extractTaskId && showExtractProgress) {
+                    extractCancelMutation.mutate({ taskId: extractTaskId })
+                  }
+                  setShowTropeExtract(false)
+                  setSelectedMaterialIdsForExtract([])
+                }}
                 className="px-5 py-2 bg-white/5 hover:bg-white/10 rounded-full text-sm"
               >
                 取消
