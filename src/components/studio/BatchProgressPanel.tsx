@@ -19,7 +19,7 @@ interface BatchStatus {
   progress?: number
   currentChapter?: number
   totalChapters?: number
-  errorLog?: string
+  errorLog?: string | null
   completedChapters?: ChapterStatusItem[]
   failedChapters?: FailedChapterItem[]
 }

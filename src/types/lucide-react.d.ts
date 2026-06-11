@@ -69,4 +69,5 @@ declare module "lucide-react" {
   export const AlignJustify: FC<LucideProps>
   export const WifiOff: FC<LucideProps>
   export const ShieldAlert: FC<LucideProps>
+  export const AlertTriangle: FC<LucideProps>
 }

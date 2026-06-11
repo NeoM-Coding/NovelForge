@@ -8,7 +8,7 @@ import {
   Loader2, X, AlertCircle, Theater, Trash2, Settings,
 } from "lucide-react"
 import { useStudioState } from "@/hooks/useStudioState"
-import { ErrorDisplay } from "@/components/studio/ErrorDisplay"
+import { ErrorDisplay, RagReferencePanel, PromptTruncatedBanner, BatchProgressPanel } from "@/components/studio"
 import type { GenProgress } from "@/types/studio"
 
 const DEFAULT_STEPS = [
@@ -211,10 +211,19 @@ export default function Studio() {
 
     // Batch
     isBatchGenerating,
+    retryingChapters,
+    handleRetryChapter,
 
     // Presearch
     presearchResults,
     isPresearching,
+
+    // RAG 引用 + Prompt 截断
+    ragReferences,
+    showRagReferencePanel,
+    setShowRagReferencePanel,
+    truncatedWarning,
+    setTruncatedWarning,
 
     // Feedback
     feedbackState,
@@ -482,6 +491,20 @@ export default function Studio() {
                     </div>
                   )
                 })()}
+
+                {/* Prompt 截断警告 */}
+                <PromptTruncatedBanner
+                  warning={truncatedWarning}
+                  onDismiss={() => setTruncatedWarning(null)}
+                />
+
+                {/* RAG 引用展示 */}
+                <RagReferencePanel
+                  references={ragReferences}
+                  visible={showRagReferencePanel}
+                  onClose={() => setShowRagReferencePanel(false)}
+                />
+
                 {paragraphs.map((para, idx) => (
                   <div
                     key={idx}
@@ -1172,40 +1195,13 @@ export default function Studio() {
                       )}
 
                       {/* 批量生成进度 */}
-                      {isBatchGenerating && batchStatusQuery.data && (
-                        <div className="mt-3 space-y-2">
-                          <div className="flex justify-between text-xs text-white/60">
-                            <span>
-                              {batchStatusQuery.data.currentChapter
-                                ? `正在生成第 ${batchStatusQuery.data.currentChapter} 章 / 共 ${batchStatusQuery.data.totalChapters || "?"} 章`
-                                : "批量生成进度"}
-                            </span>
-                            <span className="font-mono text-emerald-400">{batchStatusQuery.data.progress?.toFixed(0) || 0}%</span>
-                          </div>
-                          <div className="h-2 bg-white/10 rounded-full overflow-hidden">
-                            <div
-                              className="h-full bg-gradient-to-r from-emerald-600 to-emerald-400 transition-all duration-700 relative"
-                              style={{ width: `${batchStatusQuery.data.progress || 0}%` }}
-                            >
-                              {batchStatusQuery.data.progress && batchStatusQuery.data.progress < 100 && (
-                                <div className="absolute inset-0 bg-white/20 animate-pulse" />
-                              )}
-                            </div>
-                          </div>
-                          {batchStatusQuery.data.completedChapters && batchStatusQuery.data.completedChapters.length > 0 && (
-                            <div className="flex flex-wrap gap-1.5">
-                              {batchStatusQuery.data.completedChapters.map(c => (
-                                <span
-                                  key={c.chapterNumber}
-                                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/20 text-[10px] text-emerald-400"
-                                >
-                                  ✓ 第{c.chapterNumber}章
-                                </span>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      )}
+                      <BatchProgressPanel
+                        isBatchGenerating={isBatchGenerating}
+                        batchStatusQuery={batchStatusQuery}
+                        listChaptersQuery={listChaptersQuery}
+                        retryingChapters={retryingChapters}
+                        onRetryChapter={handleRetryChapter}
+                      />
 
                       {/* 已生成章节列表 */}
                       {listChaptersQuery.data && listChaptersQuery.data.length > 0 && (
