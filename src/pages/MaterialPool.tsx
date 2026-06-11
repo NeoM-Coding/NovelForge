@@ -6,6 +6,7 @@ import NavBar from "@/components/NavBar"
 import Select from "@/components/Select"
 import Modal from "@/components/Modal"
 import { VirtualList } from "@/components/VirtualList"
+import { AiProgressBar } from "@/components/AiProgressBar"
 import {
   Database, Upload, FileText, BookOpen, Lightbulb,
   Trash2, Tag, Sparkles, AlertCircle, CheckCircle, Loader2,
@@ -626,6 +627,18 @@ export default function MaterialPool() {
           </div>
         )}
 
+        {indexJobStatus?.status === "running" && (
+          <AiProgressBar
+            variant="determinate"
+            progress={indexJobStatus.totalCandidates && indexJobStatus.totalCandidates > 0
+              ? Math.min(100, (indexJobStatus.indexedChunks / indexJobStatus.totalCandidates) * 100)
+              : 0}
+            title="素材索引中"
+            description={`已处理 ${indexJobStatus.indexedChunks}${indexJobStatus.totalCandidates ? ` / ${indexJobStatus.totalCandidates}` : ""} 个片段`}
+            className="mb-4"
+          />
+        )}
+
         {isLoading ? (
           <div className="text-center text-white/60 py-20"><Loader2 className="w-8 h-8 animate-spin mx-auto mb-4" />加载中...</div>
         ) : materialList?.length === 0 ? (
@@ -896,9 +909,13 @@ export default function MaterialPool() {
           maxWidth="3xl"
         >
           {extractLoreMutation.isPending ? (
-            <div className="flex flex-col items-center justify-center py-20">
-              <Loader2 className="w-8 h-8 animate-spin text-amber-400 mb-4" />
-              <p className="text-white/60 text-sm">AI 正在分析素材内容并提取设定...</p>
+            <div className="flex flex-col items-center justify-center py-20 px-8">
+              <AiProgressBar
+                variant="indeterminate"
+                title="AI 提取设定中"
+                description="正在分析素材内容并提取角色、世界观等设定..."
+                className="w-full max-w-md"
+              />
             </div>
           ) : extractLoreMutation.isError ? (
             <div className="p-4 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-sm">
