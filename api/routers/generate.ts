@@ -337,6 +337,22 @@ const MODE_RAG_CONFIG: Record<
   alternate_universe:   { novelStyleLimit: 2, materialLimit: 4, keywordLimit: 2 },
 }
 
+/** 根据用户设置的 ragLimit 按比例缩放各阶段检索条数，保留模式权重比例 */
+function scaleRagConfig(
+  mode: (typeof WRITING_MODES)[number],
+  totalLimit: number,
+): { novelStyleLimit: number; materialLimit: number; keywordLimit: number } {
+  const base = MODE_RAG_CONFIG[mode]
+  const baseTotal = base.novelStyleLimit + base.materialLimit + base.keywordLimit
+  const scale = Math.max(0.5, totalLimit / baseTotal)
+
+  return {
+    novelStyleLimit: Math.max(1, Math.round(base.novelStyleLimit * scale)),
+    materialLimit: Math.max(1, Math.round(base.materialLimit * scale)),
+    keywordLimit: Math.max(1, Math.round(base.keywordLimit * scale)),
+  }
+}
+
 async function buildBaseContext(
   seriesId: number,
   brief: string,
@@ -420,7 +436,7 @@ async function buildBaseContext(
       : ""
   }
 
-  const ragConfig = ragConfigOverride ?? MODE_RAG_CONFIG[mode]
+  const ragConfig = ragConfigOverride ?? scaleRagConfig(mode, params.ragLimit ?? 5)
 
   // 4a. 从关联小说做向量检索
   if (parentNovelId) {
@@ -584,10 +600,8 @@ async function buildOutlinePrompt(
   const mode = params.writingMode
   const db = getDb()
 
-  const modeConfig = MODE_RAG_CONFIG[mode]
   const { selectedChars, unselectedChars, worldBible, canonEvents, ragCalls, ragContent, warnings } = await buildBaseContext(
-    seriesId, brief, rawParams, parentNovelId, useMaterials, materialIds, selectedCharacterIds, selectedTropeIds,
-    { novelStyleLimit: 1, materialLimit: Math.max(5, modeConfig.materialLimit), keywordLimit: modeConfig.keywordLimit }
+    seriesId, brief, rawParams, parentNovelId, useMaterials, materialIds, selectedCharacterIds, selectedTropeIds
   )
 
   // 构建 System Prompt
