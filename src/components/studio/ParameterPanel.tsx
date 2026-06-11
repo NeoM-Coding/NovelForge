@@ -196,6 +196,8 @@ function SliderControl({
 
 function GenerationStepper({ progress, steps = DEFAULT_STEPS }: { progress: GenProgress; steps?: Array<{ step: number; label: string }> }) {
   const currentStep = progress.step
+  const maxStep = steps[steps.length - 1]?.step ?? 5
+  const percent = progress.completed ? 100 : Math.min(100, (currentStep / maxStep) * 100)
   return (
     <div className="mt-4 p-3 rounded-xl bg-white/5 border border-white/10">
       <p className="text-xs font-mono text-white/50 mb-2 text-center">{progress.message}</p>
@@ -239,6 +241,16 @@ function GenerationStepper({ progress, steps = DEFAULT_STEPS }: { progress: GenP
           )
         })}
       </div>
+      {/* 新增：百分比进度条 */}
+      <div className="mt-3 h-1 bg-white/10 rounded-full overflow-hidden">
+        <div
+          className="h-full bg-amber-500 rounded-full transition-all duration-500 ease-out"
+          style={{ width: `${percent}%` }}
+        />
+      </div>
+      <p className="text-[10px] font-mono text-white/30 text-center mt-1">
+        {Math.round(percent)}%
+      </p>
     </div>
   )
 }
