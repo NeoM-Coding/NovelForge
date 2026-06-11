@@ -181,3 +181,12 @@ input[type="range"]::-moz-range-thumb {
   width: 20px;
   height: 20px;
 }
+
+@keyframes ai-progress-indeterminate {
+  0% {
+    transform: translateX(-200%);
+  }
+  100% {
+    transform: translateX(200%);
+  }
+}
