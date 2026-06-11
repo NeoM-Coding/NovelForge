@@ -145,6 +145,8 @@ export default function MaterialPool() {
     },
   })
 
+  const batchAutoExtractCancelMutation = trpc.material.batchAutoExtractCancel.useMutation()
+
   const [showForm, setShowForm] = useState(false)
   const [uploadMode, setUploadMode] = useState<UploadMode>("dual")
   const [title, setTitle] = useState("")
@@ -1294,6 +1296,10 @@ export default function MaterialPool() {
           <Modal
             open={showBatchExtractModal}
             onClose={() => {
+              // 如果任务正在运行，发送取消请求（fire-and-forget）
+              if (batchTaskId && batchStatus?.status === "running") {
+                batchAutoExtractCancelMutation.mutate({ taskId: batchTaskId })
+              }
               setShowBatchExtractModal(false)
               setBatchTaskId(null)
             }}
