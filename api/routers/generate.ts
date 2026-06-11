@@ -2761,6 +2761,7 @@ ${reviewText}
       brief: z.string().optional(),
       materialIds: z.array(z.number()).optional(),
       focus: z.enum(["plot", "character", "worldview", "writing", "full"]).default("full"),
+      canonFidelity: z.enum(["strict", "moderate", "inspired"]).default("moderate"),
     }))
     .mutation(async ({ input }) => {
       const db = getDb()
@@ -2778,10 +2779,23 @@ ${reviewText}
         materialTexts = mats.map(m => `【${m.title}】\n${m.content?.slice(0, 800) || ""}`)
       }
 
+      // 构建设定库上下文（角色、世界观、正史、RAG）
+      const brief = input.brief || ""
+      const baseCtx = await buildBaseContext(
+        input.seriesId,
+        brief,
+        {},
+        undefined,
+        true,
+        input.materialIds,
+        undefined,
+        undefined
+      )
+
       // Web 搜索（best-effort，失败不影响主流程）
       const searchQuery = input.brief?.trim()
-        ? `${seriesRow?.name || ""} ${input.brief.slice(0, 50)} 小说 剧情 灵感`
-        : `${seriesRow?.name || ""} 同人小说 创作灵感 热门梗 剧情方向`
+        ? `${seriesRow?.name || ""} ${input.brief.slice(0, 50)} 剧情分析 角色关系`
+        : `${seriesRow?.name || ""} 世界观 角色设定 剧情分析`
       const searchResults = await webSearch(searchQuery, 3)
 
       const focusMap: Record<string, string> = {
@@ -2792,15 +2806,43 @@ ${reviewText}
         full: "综合灵感（情节、角色、世界观、写作技巧）",
       }
 
+      const fidelityConstraintMap: Record<string, string> = {
+        strict: "所有灵感必须与设定库完全一致，不得引入任何未出现的角色/规则/事件。不得改变角色核心性格。",
+        moderate: "灵感必须与设定库一致，不得引入核心角色或世界观规则。次要角色可适度扩展。",
+        inspired: "基于设定库角色和世界观，允许大胆重新组合。允许'如果...会怎样'情境。",
+      }
+
+      const loreSection = [
+        baseCtx.selectedChars.length > 0
+          ? `【角色设定】\n${baseCtx.selectedChars.map(c => `- ${c.name}：${(c.personalityTraits as string[] || []).join("、") || "暂无性格描述"}`).join("\n")}`
+          : "",
+        baseCtx.worldBible
+          ? `【世界观设定】\n${(baseCtx.worldBible.aspects as Array<{ name: string; content: string }>).map(a => `- ${a.name}：${a.content.slice(0, 200)}`).join("\n")}`
+          : "",
+        baseCtx.canonEvents.length > 0
+          ? `【正史事件】\n${baseCtx.canonEvents.map(e => `- ${e.description?.slice(0, 50)}${e.isImmutable ? "（不可变）" : ""}`).join("\n")}`
+          : "",
+        baseCtx.ragContent
+          ? `【相关素材】${baseCtx.ragContent}`
+          : "",
+      ].filter(Boolean).join("\n\n")
+
       const prompt = `你是一位创意写作顾问。请根据以下信息，为用户提供具体的创作灵感建议。
 
 【系列名称】${seriesRow?.name || "未知"}
 ${input.brief?.trim() ? `【创作方向】${input.brief}` : "【创作方向】用户尚未指定具体方向，请基于系列世界观、角色设定和热门趋势自由发散，提供多样化的创作切入点。"}
 【灵感焦点】${focusMap[input.focus] || focusMap.full}
 
+${loreSection}
+
 ${materialTexts.length > 0 ? `【参考素材】\n${materialTexts.join("\n\n---\n\n")}` : ""}
 
 ${searchResults.length > 0 ? `【网络检索参考】\n${searchResults.map((r, i) => `${i + 1}. ${r.title}\n${r.snippet}`).join("\n\n")}` : ""}
+
+【铁律约束】
+1. ${fidelityConstraintMap[input.canonFidelity] || fidelityConstraintMap.moderate}
+2. 网络检索结果仅为背景参考，绝非正史。所有灵感必须优先与设定库保持一致，不得因网络信息而偏离设定库。
+3. 不得提出与正史不可变事件直接矛盾的灵感。
 
 请严格按以下 JSON 格式返回（不要包含 markdown 代码块标记）：
 {
@@ -2819,7 +2861,7 @@ ${searchResults.length > 0 ? `【网络检索参考】\n${searchResults.map((r, 
 
       const inspireResult = await chatCompletion({
         messages: [{ role: "user", content: prompt }],
-        temperature: 0.9,
+        temperature: 0.6,
         maxTokens: 4000,
       })
 
