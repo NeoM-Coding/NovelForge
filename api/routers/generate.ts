@@ -763,6 +763,7 @@ async function buildOutlinePrompt(
     "",
     "========== 角色规则 ==========",
     MODE_CONFIG[mode].characterInstruction,
+    buildCharacterLoyaltyGuide(params.characterLoyalty),
   ]
 
   if (selectedChars.length > 0) {
@@ -807,6 +808,7 @@ async function buildOutlinePrompt(
   if (canonEvents.length > 0) {
     parts.push(buildCanonSection(canonEvents, mode))
   }
+  parts.push(buildCanonConstraintGuide(params.canonConstraint, mode))
 
   // RAG 素材（不检索翻译记忆，大纲不需要文风模仿）
   if (ragContent) {
