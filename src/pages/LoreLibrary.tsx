@@ -13,6 +13,7 @@ import Modal from "@/components/Modal"
 import LoreStatsChart from "@/components/LoreStatsChart"
 import { SortableList } from "@/components/SortableList"
 import RichTextEditor from "@/components/RichTextEditor"
+import { AiProgressBar } from "@/components/AiProgressBar"
 
 export default function LoreLibrary() {
   const utils = trpc.useUtils()
@@ -731,6 +732,14 @@ export default function LoreLibrary() {
                             总结世界观 ({selectedCharIds.size})
                           </button>
                         )}
+                        {summarizeWorldMutation.isPending && (
+                          <AiProgressBar
+                            variant="indeterminate"
+                            title="AI 总结世界观中"
+                            description="正在整合设定库中的世界观维度..."
+                            className="mt-3"
+                          />
+                        )}
                         {characters && characters.length > 0 && (
                           <button
                             onClick={() => {
@@ -887,6 +896,14 @@ export default function LoreLibrary() {
                             )}
                             分析风格样本
                           </button>
+                          {extractStyleProfile.isPending && (
+                            <AiProgressBar
+                              variant="indeterminate"
+                              title="AI 分析角色风格中"
+                              description="正在阅读角色样本并提炼语言风格特征..."
+                              className="mt-3"
+                            />
+                          )}
 
                           {/* Edit inline form */}
                           {showCharEdit === char.id && (
@@ -1560,6 +1577,14 @@ export default function LoreLibrary() {
                     {extractWorldMutation.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
                     <Sparkles className="w-4 h-4" /> 开始提取
                   </button>
+                  {extractWorldMutation.isPending && (
+                    <AiProgressBar
+                      variant="indeterminate"
+                      title="AI 提取世界观中"
+                      description="正在从素材中提取世界观设定..."
+                      className="mt-3"
+                    />
+                  )}
                 </div>
               </>
             ) : (
