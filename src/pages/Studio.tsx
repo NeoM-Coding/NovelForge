@@ -8,7 +8,7 @@ import {
   Loader2, X, AlertCircle, Theater, Trash2, Settings,
 } from "lucide-react"
 import { useStudioState } from "@/hooks/useStudioState"
-import { ErrorDisplay, RagReferencePanel, PromptTruncatedBanner, BatchProgressPanel } from "@/components/studio"
+import { ErrorDisplay, RagReferencePanel, PromptTruncatedBanner, ContentTruncatedBanner, BatchProgressPanel } from "@/components/studio"
 import type { GenProgress } from "@/types/studio"
 
 const DEFAULT_STEPS = [
@@ -224,6 +224,10 @@ export default function Studio() {
     setShowRagReferencePanel,
     truncatedWarning,
     setTruncatedWarning,
+
+    // AI 生成截断警告
+    contentTruncatedWarning,
+    setContentTruncatedWarning,
 
     // Feedback
     feedbackState,
@@ -498,6 +502,14 @@ export default function Studio() {
                   warning={truncatedWarning}
                   onDismiss={() => setTruncatedWarning(null)}
                 />
+
+                {/* AI 生成截断警告 */}
+                {contentTruncatedWarning && (
+                  <ContentTruncatedBanner
+                    warning={contentTruncatedWarning}
+                    onDismiss={() => setContentTruncatedWarning(null)}
+                  />
+                )}
 
                 {/* RAG 引用展示 */}
                 <RagReferencePanel

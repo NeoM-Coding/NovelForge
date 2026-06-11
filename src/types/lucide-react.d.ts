@@ -70,4 +70,5 @@ declare module "lucide-react" {
   export const WifiOff: FC<LucideProps>
   export const ShieldAlert: FC<LucideProps>
   export const AlertTriangle: FC<LucideProps>
+  export const Scissors: FC<LucideProps>
 }
