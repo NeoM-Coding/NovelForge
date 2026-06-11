@@ -138,3 +138,9 @@ export interface PromptTruncatedWarning {
   modules: string[]
   message: string
 }
+
+// AI 生成内容截断警告（与 Prompt 截断区分）
+export interface ContentTruncatedWarning {
+  message: string
+  suggestion: string
+}

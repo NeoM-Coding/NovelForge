@@ -15,6 +15,7 @@ import type {
   GenerationError,
   RagReference,
   PromptTruncatedWarning,
+  ContentTruncatedWarning,
 } from "@/types/studio"
 
 const DRAFT_KEY = "novelforge_studio_draft"
@@ -149,6 +150,9 @@ export function useStudioState() {
 
   // Prompt 截断警告
   const [truncatedWarning, setTruncatedWarning] = useState<PromptTruncatedWarning | null>(null)
+
+  // AI 生成截断警告
+  const [contentTruncatedWarning, setContentTruncatedWarning] = useState<ContentTruncatedWarning | null>(null)
 
   // 单章重试
   const [retryingChapters, setRetryingChapters] = useState<Set<number>>(new Set())
@@ -625,6 +629,14 @@ export function useStudioState() {
       } else {
         setWarnings([])
       }
+      if (result.isTruncated) {
+        setContentTruncatedWarning({
+          message: "AI 生成的内容因长度限制被截断，结果可能不完整。",
+          suggestion: "建议减少 Brief 长度、减少引用素材数量，或选择更短的长度目标后重试。",
+        })
+      } else {
+        setContentTruncatedWarning(null)
+      }
     } catch (error) {
       if (signal.aborted) {
         toast.info("生成已取消")
@@ -701,6 +713,14 @@ export function useStudioState() {
         setWarnings(result.warnings)
       } else {
         setWarnings([])
+      }
+      if (result.isTruncated) {
+        setContentTruncatedWarning({
+          message: "AI 生成的大纲因长度限制被截断，结果可能不完整。",
+          suggestion: "建议缩短 Brief 或减少素材引用后重试。",
+        })
+      } else {
+        setContentTruncatedWarning(null)
       }
     } catch (error) {
       console.error("Outline generation failed:", error)
@@ -910,6 +930,14 @@ export function useStudioState() {
       } else {
         setWarnings([])
       }
+      if (result.isTruncated) {
+        setContentTruncatedWarning({
+          message: "续写内容因长度限制被截断。",
+          suggestion: "建议缩短续写提示，或尝试减少前文引用长度。",
+        })
+      } else {
+        setContentTruncatedWarning(null)
+      }
     } catch (error) {
       console.error("Continue failed:", error)
     } finally {
@@ -956,6 +984,14 @@ export function useStudioState() {
         setWarnings(result.warnings)
       } else {
         setWarnings([])
+      }
+      if (result.isTruncated) {
+        setContentTruncatedWarning({
+          message: "重写内容因长度限制被截断。",
+          suggestion: "建议缩小重写范围（选择更少的段落），或减少修改要求的长度。",
+        })
+      } else {
+        setContentTruncatedWarning(null)
       }
     } catch (error) {
       console.error("Regenerate failed:", error)
@@ -1154,6 +1190,10 @@ export function useStudioState() {
     // Prompt 截断
     truncatedWarning,
     setTruncatedWarning,
+
+    // AI 生成截断警告
+    contentTruncatedWarning,
+    setContentTruncatedWarning,
 
     // 单章重试
     retryingChapters,
