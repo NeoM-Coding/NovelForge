@@ -41,10 +41,10 @@ export async function indexNovel(
   const validChunks = chunks.filter(c => c.content.trim().length >= 50)
   if (validChunks.length === 0) return { chunkCount: 0 }
 
-  // 批量计算 embedding（一次 API 调用处理 20 条，大幅提速）
+  // 批量计算 embedding（一次 API 调用处理 10 条，大幅提速）
   let embeddings: number[][] = []
   try {
-    embeddings = await getEmbeddingsBatch(validChunks.map(c => c.content.trim()))
+    embeddings = await getEmbeddingsBatch(validChunks.map(c => c.content.trim()), 10)
   } catch (error) {
     console.error("Batch embedding failed:", error)
     // 批量失败时回退到逐条处理
