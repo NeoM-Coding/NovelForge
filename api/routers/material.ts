@@ -941,6 +941,18 @@ ${content}`
       const targetSeriesId = input.seriesId ?? material.seriesId ?? null
       if (!targetSeriesId) throw new Error("素材未绑定系列，请指定 seriesId")
 
+      // 平行语料不提取设定
+      if (material.sourceType === "parallel_corpus") {
+        return {
+          charactersAdded: 0,
+          charactersMerged: 0,
+          worldBibleCreated: false,
+          worldBibleMerged: false,
+          materialTitle: material.title,
+          potentialDuplicates: [],
+        }
+      }
+
       return runAutoExtractLore(input.materialId, targetSeriesId)
     }),
 
@@ -983,6 +995,12 @@ ${content}`
 
           task.currentMaterialId = materialId
           task.currentMaterialTitle = material?.title || `素材#${materialId}`
+
+          // 跳过平行语料
+          if (material?.sourceType === "parallel_corpus") {
+            task.processed++
+            continue
+          }
 
           try {
             const result = await runAutoExtractLore(materialId, input.seriesId)
