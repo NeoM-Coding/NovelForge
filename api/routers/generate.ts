@@ -301,6 +301,7 @@ const MODE_CONFIG: Record<
   (typeof WRITING_MODES)[number],
   {
     name: string
+    description: string
     characterInstruction: string
     worldViewConstraint: string
     canonTreatment: string
@@ -308,6 +309,7 @@ const MODE_CONFIG: Record<
 > = {
   canon_continuation: {
     name: "正史续写",
+    description: "在正史时间线上续写故事",
     characterInstruction:
       "【角色使用规则】仅使用以下明确列出的角色。未列出的角色不得在故事中出现。每个角色的性格、动机、语言风格必须严格遵守角色设定卡。禁止为了凑戏份而强行安排角色出场。",
     worldViewConstraint:
@@ -317,6 +319,7 @@ const MODE_CONFIG: Record<
   },
   character_spinoff: {
     name: "角色外传",
+    description: "以指定角色为主角展开独立故事",
     characterInstruction:
       "【角色使用规则】以用户指定的角色为主角展开独立故事。其他已有角色仅在情节自然需要时出现，禁止为了出场而出场。你可以创作全新的配角来推动剧情。",
     worldViewConstraint:
@@ -326,6 +329,7 @@ const MODE_CONFIG: Record<
   },
   original_in_universe: {
     name: "同世界观原创",
+    description: "在同世界观下创作全新原创角色和故事",
     characterInstruction:
       "【角色使用规则】本次创作的核心要求是：创作全新的原创角色和故事。除非创作要求（Brief）中明确点名某个已有角色，否则绝对禁止在任何场景中使用已有角色——包括对话、回忆、旁白提及、背景故事、路人甲、传说典故。主角必须是完全原创的人物：全新的姓名、身份、背景、动机和人际关系。已有角色仅作为'世界观背景设定中的抽象历史概念'存在，不可具名出现。禁止将已有角色的名字、特征、关系套用到新角色身上。",
     worldViewConstraint:
@@ -335,6 +339,7 @@ const MODE_CONFIG: Record<
   },
   alternate_universe: {
     name: "AU/平行宇宙",
+    description: "大幅改编世界观和角色设定，创造平行宇宙",
     characterInstruction:
       "【角色使用规则】保留角色的核心性格和人际关系内核，但他们的身份、职业、能力、所处环境可以大幅改变。你可以自由重组角色关系，创作全新的互动模式。",
     worldViewConstraint:
@@ -690,6 +695,35 @@ function buildStyleGuide(fidelity: number): string {
   parts.push("6. 叙事视角保持一致，不要随意切换")
 
   return parts.join("\n")
+}
+
+function buildCharacterLoyaltyGuide(loyalty: number): string {
+  if (loyalty >= 9) {
+    return `【角色忠诚度：${loyalty}/10 — 绝对严格】\n角色的每一个行为、每一句话、每一个反应都必须与其设定卡完全一致。禁止在任何情境下让角色做出与设定矛盾的行为。语言风格、口头禅、思维模式必须100%复现设定卡描述。`
+  }
+  if (loyalty >= 7) {
+    return `【角色忠诚度：${loyalty}/10 — 严格】\n角色核心性格和动机必须与设定卡一致。允许在极端情境下展现设定的隐藏侧面，但不得违背设定的基本面。语言风格应与设定卡描述相符。`
+  }
+  if (loyalty >= 4) {
+    return `【角色忠诚度：${loyalty}/10 — 适中】\n角色核心性格保持不变，但在具体情境中允许合理的发挥和延伸。可以探索设定卡未明确覆盖的情绪反应和行为选择，但不要偏离角色的本质。`
+  }
+  return `【角色忠诚度：${loyalty}/10 — 自由】\n仅保留角色的基本身份和核心关系作为骨架，性格、行为模式、语言风格均可大幅改编。允许探索角色在不同情境下的全新面向。`
+}
+
+function buildCanonConstraintGuide(constraint: string, mode: string): string {
+  const base = constraint === "strict"
+    ? "正史约束强度：严格。所有已知的正史事件、时间线、角色关系都必须严格遵守，不得产生矛盾。"
+    : constraint === "loose"
+    ? "正史约束强度：宽松。主要正史框架必须保持，但允许在空白期和边缘地带进行合理补充和延伸。次要事件可适当调整以适应剧情需要。"
+    : "正史约束强度：AU/自由改编。正史仅作为背景参考，历史事件、时间线、角色关系均可根据需要改写或重构。"
+
+  if (mode === "original_in_universe") {
+    return `【正史约束】${base}\n（注意：同世界观原创模式下，正史作为世界背景存在，你的故事不必复述或紧密绑定正史主线。）`
+  }
+  if (mode === "alternate_universe") {
+    return `【正史约束】${base}\n（注意：AU 模式下，你有权自由改写历史事件和角色命运，创造全新的时间线。）`
+  }
+  return `【正史约束】${base}`
 }
 
 async function buildOutlinePrompt(
@@ -1176,6 +1210,7 @@ async function buildSystemPrompt(
   const charactersParts: string[] = [
     "========== 角色规则 ==========",
     MODE_CONFIG[mode].characterInstruction,
+    buildCharacterLoyaltyGuide(params.characterLoyalty),
   ]
 
   // 选中角色设定卡
@@ -1267,7 +1302,10 @@ async function buildSystemPrompt(
   }
 
   // 正史
-  const canonSection = canonEvents.length > 0 ? buildCanonSection(canonEvents, mode) : ""
+  const canonSection = [
+    canonEvents.length > 0 ? buildCanonSection(canonEvents, mode) : "",
+    buildCanonConstraintGuide(params.canonConstraint, mode),
+  ].filter(Boolean).join("\n\n")
 
   // 文风指导
   let styleGuideSection = buildStyleGuide(params.styleFidelity)
@@ -2822,7 +2860,9 @@ ${reviewText}
         modeConfig.canonTreatment,
       ].join("\n")
 
-      // original_in_universe 模式下未选角色时，角色设定部分应明确要求创作全新原创角色
+      // NOTE: buildBaseContext treats empty selectedCharacterIds as "include all characters".
+      // For original_in_universe mode, this is wrong — we want NO existing characters injected
+      // unless the user explicitly selected some. Hence this override.
       const inspireSelectedChars =
         input.writingMode === "original_in_universe" &&
         (!input.selectedCharacterIds || input.selectedCharacterIds.length === 0)
@@ -2836,7 +2876,7 @@ ${reviewText}
             ? "【角色设定】\n本次创作要求创作全新的原创角色。已有角色仅作为世界观背景中的抽象历史概念存在，不可具名出场、不得参与剧情、不得与主角互动。主角必须是完全原创的人物（全新姓名、身份、背景、动机）。"
             : "",
         baseCtx.worldBible
-          ? `【世界观设定】\n${(baseCtx.worldBible.aspects as Array<{ name: string; content: string }>).map(a => `- ${a.name}：${a.content.slice(0, 200)}`).join("\n")}`
+          ? `【世界观设定】\n${((baseCtx.worldBible.aspects || []) as Array<{ name: string; content: string }>).map(a => `- ${a.name}：${a.content.slice(0, 200)}`).join("\n")}`
           : "",
         baseCtx.canonEvents.length > 0
           ? `【正史事件】\n${baseCtx.canonEvents.map(e => `- ${e.description?.slice(0, 50)}${e.isImmutable ? "（不可变）" : ""}`).join("\n")}`
@@ -2849,7 +2889,7 @@ ${reviewText}
       const prompt = `你是一位创意写作顾问。请根据以下信息，为用户提供具体的创作灵感建议。
 
 【系列名称】${seriesRow?.name || "未知"}
-【创作模式】${modeConfig.name} — ${input.writingMode === "canon_continuation" ? "在正史时间线上续写故事" : input.writingMode === "character_spinoff" ? "以指定角色为主角展开独立故事" : input.writingMode === "original_in_universe" ? "在同世界观下创作全新原创角色和故事" : "大幅改编世界观和角色设定，创造平行宇宙"}
+【创作模式】${modeConfig.name} — ${modeConfig.description}
 ${input.brief?.trim() ? `【创作方向】${input.brief}` : "【创作方向】用户尚未指定具体方向，请基于系列世界观、角色设定和热门趋势自由发散，提供多样化的创作切入点。"}
 【灵感焦点】${focusMap[input.focus] || focusMap.full}
 
