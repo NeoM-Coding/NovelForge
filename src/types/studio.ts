@@ -144,3 +144,5 @@ export interface ContentTruncatedWarning {
   message: string
   suggestion: string
 }
+
+export type InspireCanonFidelity = "strict" | "moderate" | "inspired"

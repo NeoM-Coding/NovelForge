@@ -167,6 +167,8 @@ export default function Studio() {
     setShowInspirePanel,
     inspireFocus,
     setInspireFocus,
+    inspireCanonFidelity,
+    setInspireCanonFidelity,
 
     // Outline
     useOutlineMode,
@@ -1061,6 +1063,29 @@ export default function Studio() {
                     { value: "writing", label: "文笔" },
                   ]}
                 />
+              </div>
+              <div className="mt-2">
+                <p className="text-[10px] text-white/40 mb-1">设定遵循度</p>
+                <div className="flex bg-white/5 rounded-lg p-0.5">
+                  {[
+                    { value: "strict" as const, label: "严格", desc: "完全绑定设定库" },
+                    { value: "moderate" as const, label: "适度", desc: "允许次要扩展" },
+                    { value: "inspired" as const, label: "启发", desc: "大胆重新组合" },
+                  ].map(opt => (
+                    <button
+                      key={opt.value}
+                      onClick={() => setInspireCanonFidelity(opt.value)}
+                      title={opt.desc}
+                      className={`flex-1 px-2 py-1 rounded-md text-[10px] transition-colors ${
+                        inspireCanonFidelity === opt.value
+                          ? "bg-amber-500/20 text-amber-400"
+                          : "text-white/50 hover:text-white/70"
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
 

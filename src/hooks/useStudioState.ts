@@ -10,6 +10,7 @@ import type {
   ReviewResult,
   InspireResult,
   InspireFocus,
+  InspireCanonFidelity,
   RagCall,
   GenProgress,
   GenerationError,
@@ -90,6 +91,7 @@ export function useStudioState() {
   const [inspireResult, setInspireResult] = useState<InspireResult | null>(null)
   const [showInspirePanel, setShowInspirePanel] = useState(false)
   const [inspireFocus, setInspireFocus] = useState<InspireFocus>("full")
+  const [inspireCanonFidelity, setInspireCanonFidelity] = useState<InspireCanonFidelity>("moderate")
 
   // 大纲相关状态
   const [useOutlineMode, setUseOutlineMode] = useState(false)
@@ -890,6 +892,7 @@ export function useStudioState() {
         brief: brief.trim() || undefined,
         materialIds: selectedMaterialIds.length > 0 ? selectedMaterialIds : undefined,
         focus: inspireFocus,
+        canonFidelity: inspireCanonFidelity,
       })
       setInspireResult(result)
       setShowInspirePanel(true)
@@ -1123,6 +1126,8 @@ export function useStudioState() {
     setShowInspirePanel,
     inspireFocus,
     setInspireFocus,
+    inspireCanonFidelity,
+    setInspireCanonFidelity,
 
     // 大纲
     useOutlineMode,
