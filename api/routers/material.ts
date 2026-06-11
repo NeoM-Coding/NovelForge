@@ -91,7 +91,7 @@ function splitContentIntoSegments(text: string, targetLength = 6000): string[] {
   }
   if (current) segments.push(current)
 
-  return segments.length > 0 ? segments : [text.slice(0, targetLength)]
+  return segments.length > 0 ? segments : [text]
 }
 
 async function runAutoExtractLore(
@@ -116,7 +116,12 @@ async function runAutoExtractLore(
   if (!material.content) throw new Error("素材内容为空")
 
   // AI 提取（长素材分段处理）
+  const MAX_SEGMENTS = 10
   const segments = splitContentIntoSegments(material.content || "", 6000)
+  if (segments.length > MAX_SEGMENTS) {
+    console.warn(`[autoExtractLore] Material ${materialId} has ${segments.length} segments, capping to ${MAX_SEGMENTS}`)
+    segments.length = MAX_SEGMENTS
+  }
   const segmentResults: ExtractedLore[] = []
 
   const systemPrompt = `你是一个专业的小说设定提取助手。你的任务是从小说或设定素材中提取结构化的角色信息和世界观设定。
@@ -206,12 +211,13 @@ __CONTENT_PLACEHOLDER__`
       if (charMap.has(key)) {
         const existing = charMap.get(key)!
         existing.aliases = [...new Set([...existing.aliases, ...(char.aliases || [])])]
+        existing.appearanceTags = [...new Set([...existing.appearanceTags, ...(char.appearanceTags || [])])]
         existing.personalityTraits = [...new Set([...existing.personalityTraits, ...(char.personalityTraits || [])])]
         existing.taboos = [...new Set([...existing.taboos, ...(char.taboos || [])])]
         if (!existing.coreMotivations && char.coreMotivations) existing.coreMotivations = char.coreMotivations
         if (!existing.speechPatterns && char.speechPatterns) existing.speechPatterns = char.speechPatterns
         if (!existing.canonicalArcSummary && char.canonicalArcSummary) existing.canonicalArcSummary = char.canonicalArcSummary
-        Object.assign(existing.relationships || {}, char.relationships || {})
+        existing.relationships = { ...(existing.relationships || {}), ...(char.relationships || {}) }
       } else {
         charMap.set(key, { ...char, aliases: char.aliases || [], personalityTraits: char.personalityTraits || [], taboos: char.taboos || [] })
       }
@@ -228,11 +234,27 @@ __CONTENT_PLACEHOLDER__`
     if (wb.culturalCustoms && !mergedResult.worldBible.culturalCustoms) mergedResult.worldBible.culturalCustoms = wb.culturalCustoms
     if (wb.linguisticNotes && !mergedResult.worldBible.linguisticNotes) mergedResult.worldBible.linguisticNotes = wb.linguisticNotes
     if (wb.factions?.length) {
-      mergedResult.worldBible.factions = [...(mergedResult.worldBible.factions || []), ...wb.factions]
+      const merged = [...(mergedResult.worldBible.factions || []), ...wb.factions]
+      const seen = new Set<string>()
+      mergedResult.worldBible.factions = merged.filter(f => {
+        if (seen.has(f.name)) return false
+        seen.add(f.name)
+        return true
+      })
     }
     if (wb.timelineEvents?.length) {
-      mergedResult.worldBible.timelineEvents = [...(mergedResult.worldBible.timelineEvents || []), ...wb.timelineEvents]
+      const merged = [...(mergedResult.worldBible.timelineEvents || []), ...wb.timelineEvents]
+      const seen = new Set<string>()
+      mergedResult.worldBible.timelineEvents = merged.filter(e => {
+        if (seen.has(e.description)) return false
+        seen.add(e.description)
+        return true
+      })
     }
+  }
+
+  if (segmentResults.length === 0) {
+    throw new Error("所有分段均未能解析，提取失败")
   }
 
   // 用合并后的结果替代原来的 validated
