@@ -860,14 +860,14 @@ export function useStudioState() {
 
   // 灵感激发
   const handleInspire = useCallback(async () => {
-    if (!selectedSeriesId || !brief.trim()) {
-      toast.error("请先选择系列并填写创作方向")
+    if (!selectedSeriesId) {
+      toast.error("请先选择系列")
       return
     }
     try {
       const result = await inspireMutation.mutateAsync({
         seriesId: selectedSeriesId,
-        brief: brief.trim(),
+        brief: brief.trim() || undefined,
         materialIds: selectedMaterialIds.length > 0 ? selectedMaterialIds : undefined,
         focus: inspireFocus,
       })
@@ -877,6 +877,16 @@ export function useStudioState() {
       toast.error(String(err))
     }
   }, [selectedSeriesId, brief, selectedMaterialIds, inspireFocus, inspireMutation, toast])
+
+  // 使用灵感：填充 Brief 并关闭面板
+  const handleUseInspiration = useCallback((description: string, autoTitle?: string) => {
+    setBrief(description)
+    if (autoTitle && (!title || title.trim() === "")) {
+      setTitle(autoTitle)
+    }
+    setShowInspirePanel(false)
+    toast.info("灵感已填充到创作要求中，点击「开始创作」即可生成")
+  }, [setBrief, setTitle, setShowInspirePanel, toast, title])
 
   // 续写
   const handleContinue = useCallback(async () => {
@@ -1180,6 +1190,7 @@ export function useStudioState() {
     handleExport,
     handleReview,
     handleInspire,
+    handleUseInspiration,
     handleContinue,
     handleRegenerate,
     handleLoadWork,

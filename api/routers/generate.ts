@@ -2583,7 +2583,7 @@ ${reviewText}
   inspire: publicQuery
     .input(z.object({
       seriesId: z.number(),
-      brief: z.string().min(1),
+      brief: z.string().optional(),
       materialIds: z.array(z.number()).optional(),
       focus: z.enum(["plot", "character", "worldview", "writing", "full"]).default("full"),
     }))
@@ -2604,7 +2604,9 @@ ${reviewText}
       }
 
       // Web 搜索（best-effort，失败不影响主流程）
-      const searchQuery = `${seriesRow?.name || ""} ${input.brief.slice(0, 50)} 小说 剧情 灵感`
+      const searchQuery = input.brief?.trim()
+        ? `${seriesRow?.name || ""} ${input.brief.slice(0, 50)} 小说 剧情 灵感`
+        : `${seriesRow?.name || ""} 同人小说 创作灵感 热门梗 剧情方向`
       const searchResults = await webSearch(searchQuery, 3)
 
       const focusMap: Record<string, string> = {
@@ -2618,7 +2620,7 @@ ${reviewText}
       const prompt = `你是一位创意写作顾问。请根据以下信息，为用户提供具体的创作灵感建议。
 
 【系列名称】${seriesRow?.name || "未知"}
-【创作方向】${input.brief}
+${input.brief?.trim() ? `【创作方向】${input.brief}` : "【创作方向】用户尚未指定具体方向，请基于系列世界观、角色设定和热门趋势自由发散，提供多样化的创作切入点。"}
 【灵感焦点】${focusMap[input.focus] || focusMap.full}
 
 ${materialTexts.length > 0 ? `【参考素材】\n${materialTexts.join("\n\n---\n\n")}` : ""}

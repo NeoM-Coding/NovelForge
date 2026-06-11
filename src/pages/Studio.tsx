@@ -250,6 +250,7 @@ export default function Studio() {
     handleExport,
     handleReview,
     handleInspire,
+    handleUseInspiration,
     handleContinue,
     handleRegenerate,
     handleLoadWork,
@@ -1031,7 +1032,7 @@ export default function Studio() {
               <div className="mt-3 flex items-center gap-2">
                 <button
                   onClick={handleInspire}
-                  disabled={inspireMutation.isPending || !selectedSeriesId || !brief.trim()}
+                  disabled={inspireMutation.isPending || !selectedSeriesId}
                   className="flex items-center gap-2 px-4 py-1.5 rounded-full bg-cyan-500/20 hover:bg-cyan-500/30 disabled:opacity-30 text-cyan-400 text-sm transition-colors"
                 >
                   <Wand2 className="w-3.5 h-3.5" />
@@ -1688,6 +1689,15 @@ export default function Studio() {
                         </span>
                       </div>
                       <p className="text-sm text-white/60 leading-relaxed">{ins.description}</p>
+                      <div className="mt-2 flex items-center gap-2">
+                        <button
+                          onClick={() => handleUseInspiration(ins.description, ins.title)}
+                          className="flex items-center gap-1 px-3 py-1 rounded-full bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-400 text-xs transition-colors"
+                        >
+                          <Sparkles className="w-3 h-3" />
+                          使用此灵感
+                        </button>
+                      </div>
                       {ins.references.length > 0 && (
                         <div className="mt-1.5 flex flex-wrap gap-1">
                           {ins.references.map((ref, j) => (

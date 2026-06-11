@@ -644,7 +644,7 @@ export function ParameterPanel({
           <div className="mt-3 flex items-center gap-2">
             <button
               onClick={onInspire}
-              disabled={inspireMutationPending || !selectedSeriesId || !brief.trim()}
+              disabled={inspireMutationPending || !selectedSeriesId}
               className="flex items-center gap-2 px-4 py-1.5 rounded-full bg-cyan-500/20 hover:bg-cyan-500/30 disabled:opacity-30 text-cyan-400 text-sm transition-colors"
             >
               <Wand2 className="w-3.5 h-3.5" />
