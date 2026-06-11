@@ -33,8 +33,8 @@ export interface BudgetOptions {
 }
 
 const DEFAULT_BUDGET: Required<BudgetOptions> = {
-  maxChars: 15000,      // system prompt 最大 15000 字符（约 5000 tokens）
-  ragMaxChars: 4000,    // RAG 部分单独限制 4000 字符
+  maxChars: 30000,      // system prompt 最大 30000 字符（约 10000 tokens）
+  ragMaxChars: 8000,    // RAG 部分单独限制 8000 字符
 }
 
 /**
