@@ -4,6 +4,7 @@ import { useToast } from "@/providers/toast"
 import { useState, useEffect, useRef } from "react"
 import type React from "react"
 import NavBar from "@/components/NavBar"
+import { AiProgressBar } from "@/components/AiProgressBar"
 import {
   ChevronLeft, ChevronRight, List, Languages, Type, ArrowLeft,
   Play, Download, Bookmark, BookmarkPlus, X, Loader2, Settings, Save,
@@ -822,6 +823,14 @@ export default function Reader() {
                     {translateChapterMutation.isPending ? "翻译中..." : "开始翻译"}
                   </button>
                 </div>
+                {translateChapterMutation.isPending && !translateProgress?.isTranslating && (
+                  <AiProgressBar
+                    variant="indeterminate"
+                    title="AI 翻译中"
+                    description="正在检索参考素材并翻译当前章节..."
+                    className="mt-3"
+                  />
+                )}
                 {/* 翻译风格选择 */}
                 <div className="flex gap-2">
                   {[
