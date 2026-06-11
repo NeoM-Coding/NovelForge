@@ -13,6 +13,8 @@ import type {
   RagCall,
   GenProgress,
   GenerationError,
+  RagReference,
+  PromptTruncatedWarning,
 } from "@/types/studio"
 
 const DRAFT_KEY = "novelforge_studio_draft"
@@ -141,6 +143,16 @@ export function useStudioState() {
   const [presearchResults, setPresearchResults] = useState<Array<{ id: number; title: string; relevance: number }>>([])
   const [isPresearching, setIsPresearching] = useState(false)
 
+  // RAG 引用展示
+  const [ragReferences, setRagReferences] = useState<RagReference[]>([])
+  const [showRagReferencePanel, setShowRagReferencePanel] = useState(false)
+
+  // Prompt 截断警告
+  const [truncatedWarning, setTruncatedWarning] = useState<PromptTruncatedWarning | null>(null)
+
+  // 单章重试
+  const [retryingChapters, setRetryingChapters] = useState<Set<number>>(new Set())
+
   // 错误分类函数
   function classifyError(error: unknown): GenerationError {
     if (error instanceof Error) {
@@ -164,10 +176,40 @@ export function useStudioState() {
   // 素材预搜索 mutation
   const presearchMutation = trpc.rag.presearchMaterials.useMutation()
 
+  // 单章重试 mutation
+  const batchRetryChapterMutation = trpc.generate.batchRetryChapter.useMutation({
+    onSuccess: () => {
+      utils.generate.listChapters.invalidate({ workId: generatedWorkId || 0 })
+      utils.generate.batchStatus.invalidate({ jobId: batchJobId })
+      toast.success("章节重试已启动")
+    },
+    onError: (err) => {
+      toast.error(`重试失败: ${err.message}`)
+    },
+  })
+
   // 生成 mutation
   const generateMutation = trpc.generate.fanfiction.useMutation({
-    onSuccess: () => {
+    onSuccess: (data) => {
       utils.generate.list.invalidate()
+      // 展示 RAG 引用
+      if (data.ragCalls && data.ragCalls.length > 0) {
+        setRagReferences(data.ragCalls.map(r => ({
+          type: r.type,
+          sourceTitle: r.sourceTitle,
+          chapterNumber: r.chapterNumber,
+          score: r.score,
+          content: r.content.slice(0, 200) + (r.content.length > 200 ? "..." : ""),
+        })))
+        setShowRagReferencePanel(true)
+      }
+      // Prompt 截断警告
+      if (data.truncated && data.truncated.length > 0) {
+        setTruncatedWarning({
+          modules: data.truncated,
+          message: `因 Prompt 长度限制，以下模块被截断：${data.truncated.join(", ")}`,
+        })
+      }
     },
   })
 
@@ -865,6 +907,21 @@ export function useStudioState() {
     }
   }, [generatedWorkId, isGenerating, continueMutation, useMaterials, selectedMaterialIds])
 
+  // 单章重试
+  const handleRetryChapter = useCallback(async (chapterNumber: number) => {
+    if (!generatedWorkId) return
+    setRetryingChapters(prev => new Set(prev).add(chapterNumber))
+    try {
+      await batchRetryChapterMutation.mutateAsync({ workId: generatedWorkId, chapterNumber })
+    } finally {
+      setRetryingChapters(prev => {
+        const next = new Set(prev)
+        next.delete(chapterNumber)
+        return next
+      })
+    }
+  }, [generatedWorkId, batchRetryChapterMutation])
+
   // 段落重写
   const handleRegenerate = useCallback(async (index: number) => {
     if (!generatedWorkId || !regenBrief.trim()) return
@@ -1078,6 +1135,19 @@ export function useStudioState() {
     setBatchJobId,
     isBatchGenerating,
     setIsBatchGenerating,
+
+    // RAG 引用
+    ragReferences,
+    showRagReferencePanel,
+    setShowRagReferencePanel,
+
+    // Prompt 截断
+    truncatedWarning,
+    setTruncatedWarning,
+
+    // 单章重试
+    retryingChapters,
+    handleRetryChapter,
 
     // RAG 反馈
     feedbackState,

@@ -97,4 +97,44 @@ export interface GenerationError {
   message: string
   retryable: boolean
   timestamp: number
+  chapterNumber?: number
+}
+
+// 章节状态（四级状态机）
+export type ChapterStatus = "pending" | "generating" | "generated" | "failed"
+
+export interface ChapterItem {
+  id: number
+  chapterNumber: number
+  title: string | null
+  content: string | null
+  status: ChapterStatus
+  brief?: string | null
+}
+
+// 批量任务状态
+export interface BatchStatusData {
+  jobId: number
+  status: string
+  progress: number
+  errorLog?: string | null
+  currentChapter?: number
+  totalChapters?: number
+  completedChapters: Array<{ chapterNumber: number; title: string | null; status: string }>
+  failedChapters: Array<{ chapterNumber: number; title: string; error: string }>
+}
+
+// 生成后 RAG 引用展示
+export interface RagReference {
+  type: string
+  sourceTitle?: string
+  chapterNumber?: number
+  score?: number
+  content: string
+}
+
+// Prompt 截断警告
+export interface PromptTruncatedWarning {
+  modules: string[]
+  message: string
 }
