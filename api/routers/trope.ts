@@ -474,22 +474,30 @@ async function runExtractionTask(
 
       const { system, user } = buildBatchPrompt(chunks[i], i, chunks.length)
 
-      try {
-        const result = await chatCompletion({
-          messages: [
-            { role: "system", content: system },
-            { role: "user", content: user },
-          ],
-          temperature: 0.4,
-          maxTokens: 4000,
-        })
-        console.log(`[TropeExtract] Batch ${i + 1} raw response length:`, result.content.length)
-        const batchResult = parseTropeJson(result.content)
-        console.log(`[TropeExtract] Batch ${i + 1} parsed tropes:`, batchResult.length)
-        allBatchTropes.push(...batchResult)
-      } catch (err) {
-        console.error(`[TropeExtract] Batch ${i + 1} failed:`, err)
+      let batchResult: ReturnType<typeof parseTropeJson> = []
+      let attempts = 0
+      const maxAttempts = 2
+
+      while (attempts < maxAttempts && batchResult.length === 0) {
+        try {
+          const result = await chatCompletion({
+            messages: [
+              { role: "system", content: system },
+              { role: "user", content: user },
+            ],
+            temperature: attempts === 0 ? 0.4 : 0.5,
+            maxTokens: 4000,
+          })
+          console.log(`[TropeExtract] Batch ${i + 1} attempt ${attempts + 1} raw response length:`, result.content.length)
+          batchResult = parseTropeJson(result.content)
+          console.log(`[TropeExtract] Batch ${i + 1} attempt ${attempts + 1} parsed tropes:`, batchResult.length)
+        } catch (err) {
+          console.error(`[TropeExtract] Batch ${i + 1} attempt ${attempts + 1} failed:`, err)
+        }
+        attempts++
       }
+
+      allBatchTropes.push(...batchResult)
 
       task.progress = Math.round(
         ((i + 1) / chunks.length) * (chunks.length > 1 ? 50 : 80)
@@ -552,12 +560,32 @@ async function runExtractionTask(
       task.progress = 80
     }
 
+    // 质量过滤：要求至少 2 个不同素材佐证，或单素材中出现 ≥2 次
+    task.message = "正在过滤低质量桥段..."
+    task.progress = 85
+
+    const evidenceCount = new Map<string, number>()
+    for (const t of finalTropes) {
+      for (const _ of t.examples || []) {
+        const key = t.name
+        evidenceCount.set(key, (evidenceCount.get(key) || 0) + 1)
+      }
+    }
+
+    const filteredTropes = finalTropes.filter(t => {
+      const count = evidenceCount.get(t.name) || 0
+      // 至少 2 个 examples，或 description 长度 > 50 字
+      return count >= 2 || (t.description || "").length > 50
+    })
+
+    console.log(`[TropeExtract] Quality filter: ${finalTropes.length} -> ${filteredTropes.length} tropes`)
+
     // 保存到数据库
     task.message = "正在保存结果..."
     task.progress = 90
 
     const created: (typeof plotTropes.$inferSelect)[] = []
-    for (const t of finalTropes) {
+    for (const t of filteredTropes) {
       try {
         const [trope] = await db
           .insert(plotTropes)
