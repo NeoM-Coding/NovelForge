@@ -533,7 +533,7 @@ async function buildBaseContext(
 
   // 5. RAG 结果 AI 摘要
   if (ragCalls.length > 0) {
-    const ragSummary = await summarizeRagChunks(ragCalls)
+    const ragSummary = await summarizeRagChunks(ragCalls, brief)
     if (ragSummary) {
       ragContent = "\n【参考素材摘要】\n" + ragSummary
     } else if (ragParts.length > 0) {
@@ -771,29 +771,35 @@ function safeParseOutline(raw: unknown): { valid: boolean; outline: Outline } {
   return { valid: false, outline: fallback }
 }
 
-// RAG 检索结果 AI 摘要：将碎片化的 chunks 提炼成连贯上下文
-async function summarizeRagChunks(chunks: RagCall[]): Promise<string | null> {
+// RAG 检索结果 AI 摘要：提炼与 Brief 相关的创作要点
+async function summarizeRagChunks(chunks: RagCall[], brief: string): Promise<string | null> {
   if (chunks.length === 0) return null
-  const summaryPrompt = `请根据以下从素材库检索到的参考片段，提炼一段连贯、去重、按主题组织的参考上下文。
-要求：
-1. 去除重复或高度相似的内容
-2. 如果不同片段对同一设定有矛盾描述，优先保留最详细/最权威的那条
-3. 按「世界观设定」「角色特征」「情节参考」「语言风格」分组组织
-4. 总长度控制在 500-800 字
-5. 保持原文的关键细节和用词风格
+
+  const safeBrief = brief.slice(0, 200).replace(/`/g, '"')
+  const summaryPrompt = `你是一位创作素材筛选专家。用户要写的内容是：「${safeBrief}」
+
+请从以下检索到的素材片段中，提取对本次创作最有价值的要点。
+
+【提取规则】
+1. 只保留与用户创作方向直接相关的要点，无关内容直接丢弃
+2. 去除重复或高度相似的信息
+3. 不同片段对同一设定有矛盾时，优先保留最详细的那条
+4. 每个要点用一句话概括，保留原文的关键细节和用词风格
+5. 最多提取 8 条要点，总字数控制在 300 字以内
+6. 如果某片段与用户创作方向完全无关，直接忽略
 
 参考片段：
-${chunks.map((c, i) => `【片段 ${i + 1}】${c.content}`).join("\n\n")}`
+${chunks.map((c, i) => `【片段 ${i + 1}】${c.content.slice(0, 400)}`).join("\n\n")}`
 
   try {
     const result = await chatCompletion({
       messages: [{ role: "user", content: summaryPrompt }],
       temperature: 0.3,
-      maxTokens: 2400,
+      maxTokens: 1200,
     })
     const trimmed = result.content.trim()
     // 如果摘要结果过短，视为失败，回退到原始 chunks 拼接
-    if (trimmed.length < 50) return null
+    if (trimmed.length < 30) return null
     return trimmed
   } catch {
     return null
