@@ -476,6 +476,7 @@ export function recommendKeepId(
 ): number {
   function scoreChar(char: (typeof characters)[0]): number {
     let score = 0
+    // 字段存在性得分
     if ((char.aliases as string[] | undefined)?.length) score += 1
     if (char.age) score += 1
     if ((char.appearanceTags as string[] | undefined)?.length) score += 1
@@ -485,6 +486,16 @@ export function recommendKeepId(
     if (char.speechPatterns) score += 2
     if ((char.taboos as string[] | undefined)?.length) score += 1
     if (char.canonicalArcSummary) score += 2
+
+    // 内容长度加权（字段多但内容短的卡不应该击败字段少但内容详实的卡）
+    const contentLength = [
+      char.coreMotivations,
+      char.speechPatterns,
+      char.canonicalArcSummary,
+      char.age,
+    ].filter(Boolean).join("").length
+    score += Math.min(contentLength / 100, 5) // 最多加 5 分
+
     return score
   }
 

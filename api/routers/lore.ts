@@ -275,8 +275,28 @@ ${combined}
 
         if (victims.length === 0) throw new Error("没有可合并的角色")
 
-        const mergedAliases = new Set([keep.name, ...(keep.aliases as string[] || []), ...(victims.flatMap(v => [v.name, ...(v.aliases as string[] || [])]))].filter(Boolean).map(n => String(n).trim()))
-        mergedAliases.delete(keep.name)
+        const allAliases = [keep.name, ...(keep.aliases as string[] || []), ...(victims.flatMap(v => [v.name, ...(v.aliases as string[] || [])]))].filter(Boolean).map(n => String(n).trim())
+        // 去重：避免混入错别字和过短别名，保留较长版本
+        const uniqueAliases = new Set<string>()
+        for (const alias of allAliases) {
+          const normalized = alias.trim()
+          if (!normalized || normalized === keep.name) continue
+          // 检查是否已存在近似别名
+          let exists = false
+          for (const existing of uniqueAliases) {
+            if (existing === normalized || existing.includes(normalized) || normalized.includes(existing)) {
+              // 保留较长的那个
+              if (normalized.length > existing.length) {
+                uniqueAliases.delete(existing)
+                uniqueAliases.add(normalized)
+              }
+              exists = true
+              break
+            }
+          }
+          if (!exists) uniqueAliases.add(normalized)
+        }
+        const mergedAliases = uniqueAliases
 
         const mergedTraits = [...new Set([...(keep.personalityTraits as string[] || []), ...victims.flatMap(v => v.personalityTraits as string[] || [])])]
         const mergedTaboos = [...new Set([...(keep.taboos as string[] || []), ...victims.flatMap(v => v.taboos as string[] || [])])]
