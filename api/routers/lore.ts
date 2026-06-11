@@ -1,7 +1,7 @@
 import { z } from "zod"
 import { createRouter, publicQuery } from "../middleware"
 import { getDb } from "../queries/connection"
-import { series, characterCards, worldBibles, seriesCanon, materials, plotTropes } from "@db/schema"
+import { series, characterCards, worldBibles, seriesCanon, materials, plotTropes, tropeCharacterLinks } from "@db/schema"
 import { eq, asc, inArray, sql, and } from "drizzle-orm"
 import { chatCompletion } from "../services/deepseek"
 import { findDuplicateGroups, recommendKeepId, findDuplicateAspectGroups, mergeDuplicateAspects } from "../lib/dedup-utils"
@@ -309,6 +309,12 @@ ${combined}
           })
           .where(eq(characterCards.id, keep.id))
           .returning()
+
+        // 迁移桥段-角色关联
+        await db
+          .update(tropeCharacterLinks)
+          .set({ characterId: input.keepId })
+          .where(inArray(tropeCharacterLinks.characterId, input.mergeIds))
 
         await db.delete(characterCards).where(inArray(characterCards.id, input.mergeIds))
 
