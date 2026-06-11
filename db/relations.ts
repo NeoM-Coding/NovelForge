@@ -13,6 +13,7 @@ import {
   fanFictionWorks,
   fanFictionChapters,
   materials,
+  materialAnalytics,
   plotTropes,
   bookmarks,
   annotations,
@@ -130,6 +131,13 @@ export const materialsRelations = relations(materials, ({ one }) => ({
   series: one(series, {
     fields: [materials.seriesId],
     references: [series.id],
+  }),
+}))
+
+export const materialAnalyticsRelations = relations(materialAnalytics, ({ one }) => ({
+  material: one(materials, {
+    fields: [materialAnalytics.materialId],
+    references: [materials.id],
   }),
 }))
 

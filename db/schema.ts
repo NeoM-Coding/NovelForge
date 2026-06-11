@@ -137,6 +137,28 @@ export const translationMemory = pgTable("translation_memory", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
 })
 
+// 素材使用分析（热度追踪）
+export const materialAnalytics = pgTable("material_analytics", {
+  id: serial("id").primaryKey(),
+  materialId: integer("material_id").notNull(),
+  seriesId: integer("series_id"),
+  // 检索统计
+  retrievalCount: integer("retrieval_count").notNull().default(0),
+  lastRetrievedAt: timestamp("last_retrieved_at"),
+  // 生成使用统计
+  generationUsageCount: integer("generation_usage_count").notNull().default(0),
+  lastUsedInGenerationAt: timestamp("last_used_in_generation_at"),
+  // 用户反馈
+  positiveFeedbackCount: integer("positive_feedback_count").notNull().default(0),
+  negativeFeedbackCount: integer("negative_feedback_count").notNull().default(0),
+  // 元数据
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (table) => [
+  index("idx_material_analytics_material_id").on(table.materialId),
+  index("idx_material_analytics_series_id").on(table.seriesId),
+])
+
 // Embedding 缓存（语义缓存层）
 export const embeddingCache = pgTable("embedding_cache", {
   id: serial("id").primaryKey(),

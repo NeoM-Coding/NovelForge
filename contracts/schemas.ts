@@ -118,6 +118,14 @@ export const updateMaterialScopeSchema = z.object({
   tags: z.array(z.string()).optional(),
 })
 
+export const materialAnalyticsSchema = z.object({
+  materialId: z.number(),
+  retrievalCount: z.number().default(0),
+  generationUsageCount: z.number().default(0),
+  positiveFeedbackCount: z.number().default(0),
+  negativeFeedbackCount: z.number().default(0),
+})
+
 // AI 提取设定
 export const extractedLoreSchema = z.object({
   characters: z.array(z.object({
