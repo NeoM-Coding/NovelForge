@@ -5,6 +5,22 @@ import { vectorChunks, chapters, novels, ragFeedback } from "@db/schema"
 import { eq, sql } from "drizzle-orm"
 import { indexNovel, searchSimilar } from "../services/embedder"
 
+async function findMaterialIdByChunkId(chunkId: number): Promise<number | null> {
+  const db = getDb()
+  try {
+    const [row] = await db.execute(sql`
+      SELECT (metadata->>'materialId')::int as material_id
+      FROM vector_chunks
+      WHERE id = ${chunkId}
+    `)
+    return row && (row as Record<string, unknown>).material_id
+      ? Number((row as Record<string, unknown>).material_id)
+      : null
+  } catch {
+    return null
+  }
+}
+
 export const ragRouter = createRouter({
   search: publicQuery
     .input(z.object({
@@ -134,6 +150,21 @@ export const ragRouter = createRouter({
             )))
           )
           WHERE id = ${fb.chunkId}
+        `)
+      }
+
+      // 同步更新素材反馈统计
+      for (const fb of feedbacks) {
+        if (!fb.chunkId) continue
+        const materialId = await findMaterialIdByChunkId(fb.chunkId)
+        if (!materialId) continue
+        const deltaColumn = input.wasHelpful ? "positive_feedback_count" : "negative_feedback_count"
+        await db.execute(sql`
+          INSERT INTO material_analytics (material_id, ${sql.raw(deltaColumn)}, updated_at)
+          VALUES (${materialId}, 1, NOW())
+          ON CONFLICT (material_id) DO UPDATE SET
+            ${sql.raw(deltaColumn)} = material_analytics.${sql.raw(deltaColumn)} + 1,
+            updated_at = NOW()
         `)
       }
 

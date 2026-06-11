@@ -140,7 +140,7 @@ export const translationMemory = pgTable("translation_memory", {
 // 素材使用分析（热度追踪）
 export const materialAnalytics = pgTable("material_analytics", {
   id: serial("id").primaryKey(),
-  materialId: integer("material_id").notNull(),
+  materialId: integer("material_id").notNull().unique(),
   seriesId: integer("series_id"),
   // 检索统计
   retrievalCount: integer("retrieval_count").notNull().default(0),

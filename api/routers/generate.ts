@@ -54,6 +54,22 @@ async function getPreviousContext(workId: number, currentChapterNumber: number, 
   return prevChapter?.content ? prevChapter.content.slice(-tailLength) : undefined
 }
 
+async function findMaterialIdByChunkId(chunkId: number): Promise<number | null> {
+  const db = getDb()
+  try {
+    const [row] = await db.execute(sql`
+      SELECT (metadata->>'materialId')::int as material_id
+      FROM vector_chunks
+      WHERE id = ${chunkId}
+    `)
+    return row && (row as Record<string, unknown>).material_id
+      ? Number((row as Record<string, unknown>).material_id)
+      : null
+  } catch {
+    return null
+  }
+}
+
 // 从 outline 对象构建注入 prompt 的字符串
 function buildOutlineSection(outline: Outline): string {
   const parts: string[] = []
@@ -539,6 +555,35 @@ async function buildBaseContext(
     } else if (ragParts.length > 0) {
       ragContent = "\n" + ragParts.join("\n\n")
     }
+  }
+
+  // 记录素材命中到 analytics（异步，不阻塞）
+  if (ragCalls.length > 0) {
+    Promise.resolve().then(async () => {
+      try {
+        const db = getDb()
+        // 按 materialId 聚合命中次数
+        const materialIdCounts = new Map<number, number>()
+        for (const call of ragCalls) {
+          const mid = call.chunkId ? await findMaterialIdByChunkId(call.chunkId) : null
+          if (mid) {
+            materialIdCounts.set(mid, (materialIdCounts.get(mid) || 0) + 1)
+          }
+        }
+        for (const [materialId, count] of materialIdCounts) {
+          await db.execute(sql`
+            INSERT INTO material_analytics (material_id, series_id, retrieval_count, last_retrieved_at, updated_at)
+            VALUES (${materialId}, ${seriesId}, ${count}, NOW(), NOW())
+            ON CONFLICT (material_id) DO UPDATE SET
+              retrieval_count = material_analytics.retrieval_count + ${count},
+              last_retrieved_at = NOW(),
+              updated_at = NOW()
+          `)
+        }
+      } catch {
+        // analytics 记录失败不影响主流程
+      }
+    })
   }
 
   return { selectedChars, unselectedChars, worldBible, canonEvents, ragCalls, ragContent, warnings }
