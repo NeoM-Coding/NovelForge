@@ -1001,7 +1001,8 @@ function buildWorldViewSection(
     parts.push("")
     parts.push("【世界观设定】")
     for (const aspect of aspects) {
-      parts.push(`「${aspect.name}」${aspect.content}`)
+      const content = aspect.content.length > 200 ? aspect.content.slice(0, 200) + "…" : aspect.content
+      parts.push(`「${aspect.name}」${content}`)
     }
   }
 
