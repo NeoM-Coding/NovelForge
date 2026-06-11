@@ -1730,6 +1730,27 @@ export default function Studio() {
             </div>
             {/* 内容 */}
             <div className="flex-1 overflow-y-auto px-6 pb-6 space-y-5">
+              {/* 写作模式提示 */}
+              <div className="p-3 rounded-xl bg-white/5 border border-white/10">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-xs font-mono text-amber-400/70">当前创作模式</span>
+                  <span className="text-xs font-medium text-amber-400">
+                    {params.writingMode === "canon_continuation" ? "正史续写"
+                      : params.writingMode === "character_spinoff" ? "角色外传"
+                      : params.writingMode === "original_in_universe" ? "同世界观原创"
+                      : "AU/平行宇宙"}
+                  </span>
+                </div>
+                <p className="text-[11px] text-white/50">
+                  {params.writingMode === "canon_continuation"
+                    ? "灵感建议将严格遵循正史，只使用已选角色"
+                    : params.writingMode === "character_spinoff"
+                    ? "灵感建议聚焦已有角色的独立故事"
+                    : params.writingMode === "original_in_universe"
+                    ? "灵感建议将创作全新原创角色，已有角色仅作为世界观背景"
+                    : "灵感建议保留角色内核，允许自由改编世界观"}
+                </p>
+              </div>
               {/* 灵感卡片 */}
               {inspireResult.inspirations.length > 0 && (
                 <div className="space-y-3">
