@@ -9,7 +9,7 @@ import { autoClassifyTranslationStyle } from "../services/style-analyzer"
 
 // ========== 批量提取异步任务状态（内存队列，单用户场景）==========
 
-type BatchTaskStatus = "running" | "completed" | "failed"
+type BatchTaskStatus = "running" | "completed" | "failed" | "cancelled"
 
 interface BatchTask {
   id: string
@@ -973,7 +973,7 @@ ${content}`
       // 启动后台处理（不 await，立即返回 taskId）
       Promise.resolve().then(async () => {
         for (const materialId of input.materialIds) {
-          if (task.status === "failed") break
+          if (task.status === "failed" || task.status === "cancelled") break
 
           const db = getDb()
           const [material] = await db
@@ -998,7 +998,11 @@ ${content}`
           task.processed++
         }
 
-        task.status = task.errors.length > 0 && task.processed === 0 ? "failed" : "completed"
+        if (task.status === "cancelled") {
+          console.log(`[BatchExtract] task ${taskId} cancelled at ${task.processed}/${task.total}`)
+        } else {
+          task.status = task.errors.length > 0 && task.processed === 0 ? "failed" : "completed"
+        }
         task.completedAt = new Date()
         task.currentMaterialId = null
         task.currentMaterialTitle = ""
@@ -1033,6 +1037,21 @@ ${content}`
         startedAt: task.startedAt,
         completedAt: task.completedAt,
       }
+    }),
+
+  // 取消批量提取任务
+  batchAutoExtractCancel: publicQuery
+    .input(z.object({ taskId: z.string() }))
+    .mutation(async ({ input }) => {
+      const task = batchTasks.get(input.taskId)
+      if (!task) {
+        return { success: false, reason: "任务不存在或已过期" }
+      }
+      if (task.status === "completed" || task.status === "failed") {
+        return { success: false, reason: "任务已结束，无法取消" }
+      }
+      task.status = "cancelled"
+      return { success: true }
     }),
 
   // 保存为风格样本（生成内容回流）
