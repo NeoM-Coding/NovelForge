@@ -2762,6 +2762,8 @@ ${reviewText}
       materialIds: z.array(z.number()).optional(),
       focus: z.enum(["plot", "character", "worldview", "writing", "full"]).default("full"),
       canonFidelity: z.enum(["strict", "moderate", "inspired"]).default("moderate"),
+      writingMode: z.enum(WRITING_MODES).default("canon_continuation"),
+      selectedCharacterIds: z.array(z.number()).optional(),
     }))
     .mutation(async ({ input }) => {
       const db = getDb()
@@ -2784,11 +2786,11 @@ ${reviewText}
       const baseCtx = await buildBaseContext(
         input.seriesId,
         brief,
-        {},
+        { writingMode: input.writingMode },
         undefined,
         true,
         input.materialIds,
-        undefined,
+        input.selectedCharacterIds,
         undefined
       )
 
@@ -2812,10 +2814,27 @@ ${reviewText}
         inspired: "基于设定库角色和世界观，允许大胆重新组合。允许'如果...会怎样'情境。",
       }
 
+      const modeConfig = MODE_CONFIG[input.writingMode]
+
+      const modeConstraintSection = [
+        modeConfig.characterInstruction,
+        modeConfig.worldViewConstraint,
+        modeConfig.canonTreatment,
+      ].join("\n")
+
+      // original_in_universe 模式下未选角色时，角色设定部分应明确要求创作全新原创角色
+      const inspireSelectedChars =
+        input.writingMode === "original_in_universe" &&
+        (!input.selectedCharacterIds || input.selectedCharacterIds.length === 0)
+          ? []
+          : baseCtx.selectedChars
+
       const loreSection = [
-        baseCtx.selectedChars.length > 0
-          ? `【角色设定】\n${baseCtx.selectedChars.map(c => `- ${c.name}：${(c.personalityTraits as string[] || []).join("、") || "暂无性格描述"}`).join("\n")}`
-          : "",
+        inspireSelectedChars.length > 0
+          ? `【角色设定】\n${inspireSelectedChars.map(c => `- ${c.name}：${(c.personalityTraits as string[] || []).join("。") || "暂无性格描述"}`).join("\n")}`
+          : input.writingMode === "original_in_universe"
+            ? "【角色设定】\n本次创作要求创作全新的原创角色。已有角色仅作为世界观背景中的抽象历史概念存在，不可具名出场、不得参与剧情、不得与主角互动。主角必须是完全原创的人物（全新姓名、身份、背景、动机）。"
+            : "",
         baseCtx.worldBible
           ? `【世界观设定】\n${(baseCtx.worldBible.aspects as Array<{ name: string; content: string }>).map(a => `- ${a.name}：${a.content.slice(0, 200)}`).join("\n")}`
           : "",
@@ -2830,6 +2849,7 @@ ${reviewText}
       const prompt = `你是一位创意写作顾问。请根据以下信息，为用户提供具体的创作灵感建议。
 
 【系列名称】${seriesRow?.name || "未知"}
+【创作模式】${modeConfig.name} — ${input.writingMode === "canon_continuation" ? "在正史时间线上续写故事" : input.writingMode === "character_spinoff" ? "以指定角色为主角展开独立故事" : input.writingMode === "original_in_universe" ? "在同世界观下创作全新原创角色和故事" : "大幅改编世界观和角色设定，创造平行宇宙"}
 ${input.brief?.trim() ? `【创作方向】${input.brief}` : "【创作方向】用户尚未指定具体方向，请基于系列世界观、角色设定和热门趋势自由发散，提供多样化的创作切入点。"}
 【灵感焦点】${focusMap[input.focus] || focusMap.full}
 
@@ -2838,6 +2858,8 @@ ${loreSection}
 ${materialTexts.length > 0 ? `【参考素材】\n${materialTexts.join("\n\n---\n\n")}` : ""}
 
 ${searchResults.length > 0 ? `【网络检索参考】\n${searchResults.map((r, i) => `${i + 1}. ${r.title}\n${r.snippet}`).join("\n\n")}` : ""}
+
+${modeConstraintSection}
 
 【铁律约束】
 1. ${fidelityConstraintMap[input.canonFidelity] || fidelityConstraintMap.moderate}
