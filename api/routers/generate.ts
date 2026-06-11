@@ -3,7 +3,7 @@ import { createRouter, publicQuery } from "../middleware"
 import { getDb } from "../queries/connection"
 import { characterCards, worldBibles, seriesCanon, fanFictionWorks, fanFictionChapters, plotTropes, novels, chapters, ragFeedback, generationJobs, generationMetrics, materials, series } from "@db/schema"
 import { eq, asc, desc, sql } from "drizzle-orm"
-import { streamChat, chatCompletion } from "../services/deepseek"
+import { streamChat, chatCompletion, getEmbeddingsBatch } from "../services/deepseek"
 import { searchSimilar, getEmbeddingWithCache } from "../services/embedder"
 import { outlineSchema, type Outline, batchGenerationSchema, exportWorkSchema } from "@contracts/schemas"
 import { assemblePromptWithBudget } from "../lib/prompt-budget"
@@ -291,6 +291,7 @@ type BaseContext = {
   ragCalls: RagCall[]
   ragContent: string
   warnings: string[]
+  prioritizedAspects?: Array<{ name: string; content: string; relevance: number }>
 }
 
 // ========== 创作模式配置 ==========
@@ -429,13 +430,33 @@ async function buildBaseContext(
     .where(eq(seriesCanon.seriesId, seriesId))
     .orderBy(asc(seriesCanon.eventOrder))
 
-  // 4. Hybrid RAG 检索
+  // 3b. 计算世界观维度与 Brief 的相关性（如有 embedding）
   let briefEmbedding: number[] | undefined
   try {
     briefEmbedding = await getEmbeddingWithCache(brief)
   } catch {
     // embedding 失败不影响主流程
   }
+
+  let prioritizedAspects: Array<{ name: string; content: string; relevance: number }> = []
+  if (worldBible?.aspects && briefEmbedding) {
+    const aspects = worldBible.aspects as Array<{ name: string; content: string }>
+    // 为每个维度计算与 brief 的语义相似度
+    try {
+      const aspectEmbeddings = await getEmbeddingsBatch(aspects.map(a => a.name + ":" + a.content.slice(0, 100)))
+      prioritizedAspects = aspects.map((a, i) => {
+        const emb = aspectEmbeddings[i]
+        const relevance = emb && emb.length > 0
+          ? cosineSimilarity(briefEmbedding!, emb)
+          : 0.5
+        return { ...a, relevance }
+      }).sort((a, b) => b.relevance - a.relevance)
+    } catch {
+      // embedding 失败不影响主流程
+    }
+  }
+
+  // 4. Hybrid RAG 检索
 
   let ragContent = ""
   const ragParts: string[] = []
@@ -586,7 +607,7 @@ async function buildBaseContext(
     })
   }
 
-  return { selectedChars, unselectedChars, worldBible, canonEvents, ragCalls, ragContent, warnings }
+  return { selectedChars, unselectedChars, worldBible, canonEvents, ragCalls, ragContent, warnings, prioritizedAspects }
 }
 
 function buildStyleGuide(fidelity: number): string {
@@ -851,14 +872,41 @@ ${chunks.map((c, i) => `【片段 ${i + 1}】${c.content.slice(0, 400)}`).join("
   }
 }
 
-function buildWorldViewSection(worldBible: typeof worldBibles.$inferSelect | undefined): string {
+function cosineSimilarity(a: number[], b: number[]): number {
+  if (a.length !== b.length) return 0
+  let dot = 0, normA = 0, normB = 0
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i]
+    normA += a[i] * a[i]
+    normB += b[i] * b[i]
+  }
+  if (normA === 0 || normB === 0) return 0
+  return dot / (Math.sqrt(normA) * Math.sqrt(normB))
+}
+
+function buildWorldViewSection(
+  worldBible: typeof worldBibles.$inferSelect | undefined,
+  prioritizedAspects?: Array<{ name: string; content: string; relevance: number }>
+): string {
   if (!worldBible) return ""
 
   const parts: string[] = []
 
-  // 优先使用动态 aspects（新数据）
-  const aspects = (worldBible.aspects || []) as Array<{ name: string; content: string }>
-  if (aspects.length > 0) {
+  // 优先使用按相关性排序的 aspects
+  if (prioritizedAspects && prioritizedAspects.length > 0) {
+    parts.push("")
+    parts.push("【世界观设定】")
+    // 只注入相关性 > 0.6 或 top 5 的维度
+    const topAspects = prioritizedAspects.filter(a => a.relevance > 0.6).slice(0, 5)
+    for (const aspect of topAspects) {
+      parts.push(`「${aspect.name}」${aspect.content}`)
+    }
+    if (topAspects.length < prioritizedAspects.length) {
+      parts.push(`（另有 ${prioritizedAspects.length - topAspects.length} 个世界观维度因与当前创作方向关联较低而省略）`)
+    }
+  } else if (worldBible.aspects && (worldBible.aspects as Array<unknown>).length > 0) {
+    // 回退：全量注入（无 embedding 时）
+    const aspects = worldBible.aspects as Array<{ name: string; content: string }>
     parts.push("")
     parts.push("【世界观设定】")
     for (const aspect of aspects) {
@@ -992,7 +1040,7 @@ async function buildSystemPrompt(
   const mode = params.writingMode
   const db = getDb()
 
-  const { selectedChars, unselectedChars, worldBible, canonEvents, ragCalls, ragContent, warnings } = await buildBaseContext(
+  const { selectedChars, unselectedChars, worldBible, canonEvents, ragCalls, ragContent, warnings, prioritizedAspects } = await buildBaseContext(
     seriesId, brief, rawParams, parentNovelId, useMaterials, materialIds, selectedCharacterIds, selectedTropeIds
   )
 
@@ -1069,7 +1117,7 @@ async function buildSystemPrompt(
   ]
 
   const worldViewParts: string[] = []
-  const worldViewSection = buildWorldViewSection(worldBible)
+  const worldViewSection = buildWorldViewSection(worldBible, prioritizedAspects)
   if (worldViewSection) {
     worldViewParts.push(worldViewSection)
   }
