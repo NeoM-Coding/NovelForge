@@ -7,7 +7,7 @@ import { chatCompletion } from "../services/deepseek"
 
 /* ========== 内存任务存储（后台异步提取） ========== */
 interface ExtractionTask {
-  status: "pending" | "processing" | "completed" | "failed"
+  status: "pending" | "processing" | "completed" | "failed" | "cancelled"
   progress: number
   totalBatches: number
   completedBatches: number
@@ -326,6 +326,21 @@ export const tropeRouter = createRouter({
       }
     }),
 
+  // 取消桥段提取任务
+  extractCancel: publicQuery
+    .input(z.object({ taskId: z.number() }))
+    .mutation(async ({ input }) => {
+      const task = extractionTasks.get(input.taskId)
+      if (!task) {
+        return { success: false, reason: "任务不存在或已过期" }
+      }
+      if (task.status === "completed" || task.status === "failed") {
+        return { success: false, reason: "任务已结束，无法取消" }
+      }
+      task.status = "cancelled"
+      return { success: true }
+    }),
+
   // 热key桥段统计：根据用户历史生成记录统计高频使用的桥段
   hotkeys: publicQuery
     .input(z.object({
@@ -405,6 +420,11 @@ async function runExtractionTask(
 
     // 第一轮：串行处理每批
     for (let i = 0; i < chunks.length; i++) {
+      // 检查是否被取消
+      if (extractionTasks.get(taskId)?.status === "cancelled") {
+        console.log(`[TropeExtract] task ${taskId} cancelled at batch ${i + 1}`)
+        break
+      }
       task.message = `正在分析第 ${i + 1}/${task.totalBatches} 批素材...`
       task.completedBatches = i
 
@@ -432,11 +452,25 @@ async function runExtractionTask(
       )
     }
 
+    // 检查是否被取消（第一批处理完后）
+    if (extractionTasks.get(taskId)?.status === "cancelled") {
+      task.progress = 100
+      task.message = "任务已取消"
+      return
+    }
+
     if (allBatchTropes.length === 0) {
       task.status = "completed"
       task.progress = 100
       task.message = "提取完成，未在素材中发现桥段"
       task.result = { tropes: [], count: 0 }
+      return
+    }
+
+    // 检查是否被取消（多批合并前）
+    if (extractionTasks.get(taskId)?.status === "cancelled") {
+      task.progress = 100
+      task.message = "任务已取消"
       return
     }
 
