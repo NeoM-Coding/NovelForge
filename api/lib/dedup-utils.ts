@@ -306,6 +306,41 @@ export interface AspectRef {
   content: string
 }
 
+/**
+ * 计算两个字符串的 Jaccard 相似度（基于字符二元组）
+ */
+function jaccardSimilarity(a: string, b: string): number {
+  const normalize = (s: string) => s.toLowerCase().replace(/\s+/g, "")
+  const na = normalize(a)
+  const nb = normalize(b)
+  if (na.length < 10 || nb.length < 10) return 0
+
+  const getBigrams = (s: string) => {
+    const set = new Set<string>()
+    for (let i = 0; i < s.length - 1; i++) {
+      set.add(s.slice(i, i + 2))
+    }
+    return set
+  }
+
+  const bigramsA = getBigrams(na)
+  const bigramsB = getBigrams(nb)
+  const intersection = new Set([...bigramsA].filter(x => bigramsB.has(x)))
+  const union = new Set([...bigramsA, ...bigramsB])
+
+  return union.size > 0 ? intersection.size / union.size : 0
+}
+
+/**
+ * 检测两个世界观维度的内容是否高度重叠
+ */
+function checkContentOverlap(a: AspectRef, b: AspectRef): { overlap: boolean; similarity: number } {
+  // 名称已经由 checkNameOverlap 处理，这里补充内容检测
+  const contentSim = jaccardSimilarity(a.content, b.content)
+  // 内容相似度 > 0.5 认为是重复
+  return { overlap: contentSim > 0.5, similarity: contentSim }
+}
+
 export interface DuplicateAspectGroup {
   ids: string[]
   names: string[]
@@ -333,9 +368,19 @@ export function findDuplicateAspectGroups(aspects: AspectRef[]): DuplicateAspect
       const a = aspects[i]
       const b = aspects[j]
       const result = checkNameOverlap([a.name], [b.name])
-      if (result.matched) {
+      const contentCheck = checkContentOverlap(a, b)
+      if (result.matched || contentCheck.overlap) {
         const key = getKey(a.id, b.id)
-        matchRecords.set(key, result)
+        if (result.matched) {
+          matchRecords.set(key, result)
+        } else {
+          matchRecords.set(key, {
+            matched: true,
+            type: "fuzzy" as const,
+            confidence: Math.min(contentCheck.similarity, 0.95),
+            matchedNames: [a.name, b.name],
+          })
+        }
         if (!adjacency.has(a.id)) adjacency.set(a.id, new Set())
         if (!adjacency.has(b.id)) adjacency.set(b.id, new Set())
         adjacency.get(a.id)!.add(b.id)
