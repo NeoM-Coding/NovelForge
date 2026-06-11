@@ -70,6 +70,30 @@ function cleanupOldIndexTasks(maxAgeMs = 1000 * 60 * 60 * 2): void {
 
 // ========== 内部辅助：一键提取核心逻辑 ==========
 
+/**
+ * 将文本分割为语义段落（尽量在空行处分割）
+ * 每段目标长度约 targetLength 字符
+ */
+function splitContentIntoSegments(text: string, targetLength = 6000): string[] {
+  if (text.length <= targetLength) return [text]
+
+  const segments: string[] = []
+  const paragraphs = text.split(/\n\s*\n/).map(p => p.trim()).filter(Boolean)
+
+  let current = ""
+  for (const para of paragraphs) {
+    if (current.length + para.length + 2 > targetLength && current.length > 0) {
+      segments.push(current)
+      current = para
+    } else {
+      current = current ? current + "\n\n" + para : para
+    }
+  }
+  if (current) segments.push(current)
+
+  return segments.length > 0 ? segments : [text.slice(0, targetLength)]
+}
+
 async function runAutoExtractLore(
   materialId: number,
   targetSeriesId: number
@@ -91,8 +115,10 @@ async function runAutoExtractLore(
   if (!material) throw new Error("素材不存在")
   if (!material.content) throw new Error("素材内容为空")
 
-  // AI 提取
-  const content = material.content.slice(0, 8000)
+  // AI 提取（长素材分段处理）
+  const segments = splitContentIntoSegments(material.content || "", 6000)
+  const segmentResults: ExtractedLore[] = []
+
   const systemPrompt = `你是一个专业的小说设定提取助手。你的任务是从小说或设定素材中提取结构化的角色信息和世界观设定。
 
 提取要求：
@@ -133,27 +159,87 @@ async function runAutoExtractLore(
 }
 
 素材内容：
-${content}`
+__CONTENT_PLACEHOLDER__`
 
-  const result = await chatCompletion({
-    messages: [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: userPrompt },
-    ],
-    temperature: 0.3,
-    maxTokens: 8000,
-  })
+  for (let segIdx = 0; segIdx < segments.length; segIdx++) {
+    const segment = segments[segIdx]
+    const segmentPrompt = segments.length > 1
+      ? `这是素材的第 ${segIdx + 1}/${segments.length} 段。`
+      : ""
 
-  let parsed: unknown
-  const fixedJson = tryFixTruncatedJson(result.content)
-  if (fixedJson) {
-    parsed = JSON.parse(fixedJson)
-  } else {
-    console.error("[autoExtractLore] JSON 修复失败，原始响应前2000字符:", result.content.slice(0, 2000))
-    throw new Error("AI 返回的内容无法解析为有效 JSON")
+    const result = await chatCompletion({
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: segmentPrompt + userPrompt.replace("__CONTENT_PLACEHOLDER__", segment) },
+      ],
+      temperature: 0.3,
+      maxTokens: 8000,
+    })
+
+    let parsed: unknown
+    const fixedJson = tryFixTruncatedJson(result.content)
+    if (fixedJson) {
+      parsed = JSON.parse(fixedJson)
+    } else {
+      console.error(`[autoExtractLore] segment ${segIdx + 1} JSON 修复失败`)
+      continue
+    }
+
+    const validated = extractedLoreSchema.parse(parsed)
+    segmentResults.push(validated)
   }
 
-  const validated = extractedLoreSchema.parse(parsed)
+  // 汇总所有分段结果
+  const mergedResult: ExtractedLore = {
+    characters: [],
+    worldBible: {
+      factions: [],
+      timelineEvents: [],
+    },
+  }
+
+  // 角色去重合并（跨段落同名角色取并集）
+  const charMap = new Map<string, ExtractedLore["characters"][0]>()
+  for (const seg of segmentResults) {
+    for (const char of seg.characters || []) {
+      const key = char.name.trim()
+      if (charMap.has(key)) {
+        const existing = charMap.get(key)!
+        existing.aliases = [...new Set([...existing.aliases, ...(char.aliases || [])])]
+        existing.personalityTraits = [...new Set([...existing.personalityTraits, ...(char.personalityTraits || [])])]
+        existing.taboos = [...new Set([...existing.taboos, ...(char.taboos || [])])]
+        if (!existing.coreMotivations && char.coreMotivations) existing.coreMotivations = char.coreMotivations
+        if (!existing.speechPatterns && char.speechPatterns) existing.speechPatterns = char.speechPatterns
+        if (!existing.canonicalArcSummary && char.canonicalArcSummary) existing.canonicalArcSummary = char.canonicalArcSummary
+        Object.assign(existing.relationships || {}, char.relationships || {})
+      } else {
+        charMap.set(key, { ...char, aliases: char.aliases || [], personalityTraits: char.personalityTraits || [], taboos: char.taboos || [] })
+      }
+    }
+  }
+  mergedResult.characters = Array.from(charMap.values())
+
+  // 世界观合并（取非空字段）
+  for (const seg of segmentResults) {
+    const wb = seg.worldBible || {}
+    if (wb.geography && !mergedResult.worldBible.geography) mergedResult.worldBible.geography = wb.geography
+    if (wb.magicSystem && !mergedResult.worldBible.magicSystem) mergedResult.worldBible.magicSystem = wb.magicSystem
+    if (wb.technologyLevel && !mergedResult.worldBible.technologyLevel) mergedResult.worldBible.technologyLevel = wb.technologyLevel
+    if (wb.culturalCustoms && !mergedResult.worldBible.culturalCustoms) mergedResult.worldBible.culturalCustoms = wb.culturalCustoms
+    if (wb.linguisticNotes && !mergedResult.worldBible.linguisticNotes) mergedResult.worldBible.linguisticNotes = wb.linguisticNotes
+    if (wb.factions?.length) {
+      mergedResult.worldBible.factions = [...(mergedResult.worldBible.factions || []), ...wb.factions]
+    }
+    if (wb.timelineEvents?.length) {
+      mergedResult.worldBible.timelineEvents = [...(mergedResult.worldBible.timelineEvents || []), ...wb.timelineEvents]
+    }
+  }
+
+  // 用合并后的结果替代原来的 validated
+  const validated: ExtractedLore = {
+    characters: mergedResult.characters,
+    worldBible: mergedResult.worldBible,
+  }
 
   // 导入角色（同名或别名重叠自动合并）
   let charactersAdded = 0
@@ -335,7 +421,7 @@ ${content}`
 }
 import { getEmbeddingsBatch, chatCompletion } from "../services/deepseek"
 import { parseParallelCorpus } from "../services/parser"
-import { extractedLoreSchema } from "@contracts/schemas"
+import { extractedLoreSchema, type ExtractedLore } from "@contracts/schemas"
 import { indexNovel } from "../services/embedder"
 import { splitIntoSemanticChunks, type Chunk } from "../lib/chunk-utils"
 
