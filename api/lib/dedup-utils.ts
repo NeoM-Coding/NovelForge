@@ -472,13 +472,31 @@ export function mergeDuplicateAspects(
       (curr.content || "").length > (best.content || "").length ? curr : best
     )
 
-    // 收集其他维度的补充内容
-    const otherContents = groupAspects
-      .filter(a => a.id !== keep.id && a.content && a.content.trim().length > 0)
-      .map(a => `【${a.name}】\n${a.content}`)
+    // 收集其他维度的补充内容（去重）
+    const keepParagraphs = new Set((keep.content || "").split(/\n\s*\n/).map(p => p.trim()).filter(Boolean))
+    const uniqueAdditions: string[] = []
 
-    const mergedContent = otherContents.length > 0
-      ? `${keep.content}\n\n--- 补充内容 ---\n${otherContents.join("\n\n")}`
+    for (const a of groupAspects) {
+      if (a.id === keep.id || !a.content) continue
+      const paragraphs = a.content.split(/\n\s*\n/).map(p => p.trim()).filter(Boolean)
+      for (const para of paragraphs) {
+        // 检查是否与主维度的段落高度相似
+        let isDuplicate = false
+        for (const keepPara of keepParagraphs) {
+          if (jaccardSimilarity(para, keepPara) > 0.7) {
+            isDuplicate = true
+            break
+          }
+        }
+        if (!isDuplicate) {
+          uniqueAdditions.push(para)
+          keepParagraphs.add(para) // 防止后续维度重复添加
+        }
+      }
+    }
+
+    const mergedContent = uniqueAdditions.length > 0
+      ? `${keep.content}\n\n--- 补充内容 ---\n${uniqueAdditions.join("\n\n")}`
       : keep.content
 
     result.push({
