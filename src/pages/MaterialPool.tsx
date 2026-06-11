@@ -1293,7 +1293,10 @@ export default function MaterialPool() {
           {/* 批量提取 — 选择系列弹窗 */}
           <Modal
             open={showBatchExtractModal}
-            onClose={() => setShowBatchExtractModal(false)}
+            onClose={() => {
+              setShowBatchExtractModal(false)
+              setBatchTaskId(null)
+            }}
             title="批量提取设定"
             maxWidth="md"
           >
@@ -1336,10 +1339,9 @@ export default function MaterialPool() {
                     setShowBatchExtractModal(false)
                     setBatchTaskId(null)
                   }}
-                  disabled={batchTaskId !== null && batchStatus?.status === "running"}
-                  className="px-6 py-2.5 bg-white/5 hover:bg-white/10 disabled:opacity-30 rounded-full text-sm"
+                  className="px-6 py-2.5 bg-white/5 hover:bg-white/10 rounded-full text-sm"
                 >
-                  取消
+                  {batchTaskId && batchStatus?.status === "running" ? "关闭（后台继续）" : "取消"}
                 </button>
                 <button
                   onClick={() => {
