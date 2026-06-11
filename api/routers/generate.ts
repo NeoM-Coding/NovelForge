@@ -954,6 +954,7 @@ async function buildSystemPrompt(
   // 翻译记忆风格检索（当风格忠实度 >= 7 且有关联小说时）—— 仅 buildSystemPrompt 需要
   let extendedRagContent = ragContent
   let extendedRagCalls = ragCalls
+  let tmPairs: Array<{ source: string; translated: string; styleTag: string | null }> = []
   if (params.styleFidelity >= 7 && parentNovelId) {
     try {
       let briefEmbedding: number[] | undefined
@@ -965,32 +966,20 @@ async function buildSystemPrompt(
       if (briefEmbedding) {
         const embeddingJson = JSON.stringify(briefEmbedding)
         const tmResults = await db.execute(sql`
-          SELECT source_text, translated_text,
+          SELECT source_text, translated_text, style_tag,
             1 - (embedding <=> ${embeddingJson}) as similarity
           FROM translation_memory
           WHERE novel_id = ${parentNovelId}
+             OR (series_id = ${seriesId} AND novel_id IS NULL)
           ORDER BY embedding <=> ${embeddingJson}
           LIMIT 3
         `)
         const tmRows = Array.isArray(tmResults) ? tmResults : []
-        if (tmRows.length > 0) {
-          const tmContent = tmRows.map((r: Record<string, unknown>) =>
-            `原文: ${String(r.source_text).slice(0, 100)}\n译文: ${String(r.translated_text).slice(0, 150)}`
-          ).join("\n---\n")
-
-          extendedRagContent = extendedRagContent
-            ? extendedRagContent + "\n\n【文风对照样本】以下是原作原文与译文的对应片段，请严格模仿其译文的句式节奏、用词风格和叙事口吻：\n" + tmContent
-            : "\n【文风对照样本】以下是原作原文与译文的对应片段，请严格模仿其译文的句式节奏、用词风格和叙事口吻：\n" + tmContent
-
-          for (const r of tmRows) {
-            extendedRagCalls.push({
-              type: "material",
-              content: `原文: ${String(r.source_text).slice(0, 100)}\n译文: ${String(r.translated_text).slice(0, 150)}`,
-              score: Number(r.similarity),
-              sourceTitle: "翻译记忆",
-            })
-          }
-        }
+        tmPairs = tmRows.map((r: Record<string, unknown>) => ({
+          source: String(r.source_text),
+          translated: String(r.translated_text),
+          styleTag: r.style_tag ? String(r.style_tag) : null,
+        }))
       }
     } catch { /* 翻译记忆检索可选，失败不影响主流程 */ }
   }
@@ -1138,7 +1127,25 @@ async function buildSystemPrompt(
   const canonSection = canonEvents.length > 0 ? buildCanonSection(canonEvents, mode) : ""
 
   // 文风指导
-  const styleGuideSection = buildStyleGuide(params.styleFidelity)
+  let styleGuideSection = buildStyleGuide(params.styleFidelity)
+
+  // 注入 Translation Memory 风格句对
+  if (tmPairs && tmPairs.length > 0) {
+    const tmParts: string[] = [
+      "",
+      "【语言风格参考句对】",
+      "以下句对展示了参考小说的语言风格，请模仿其用词、句式和语气：",
+    ]
+    for (const pair of tmPairs) {
+      tmParts.push(`原文：${pair.source}`)
+      tmParts.push(`译文：${pair.translated}`)
+      if (pair.styleTag) tmParts.push(`（风格标签：${pair.styleTag}）`)
+      tmParts.push("")
+    }
+    styleGuideSection = styleGuideSection
+      ? styleGuideSection + "\n" + tmParts.join("\n")
+      : tmParts.join("\n")
+  }
 
   // RAG 素材
   const ragParts: string[] = []
