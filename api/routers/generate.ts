@@ -370,6 +370,46 @@ function scaleRagConfig(
   }
 }
 
+function validateRagAgainstLore(
+  ragCalls: RagCall[],
+  characters: typeof characterCards.$inferSelect[],
+  selectedCharacterIds: number[],
+  canonEvents: typeof seriesCanon.$inferSelect[],
+): string[] {
+  const conflicts: string[] = []
+
+  for (const call of ragCalls) {
+    const content = call.content
+
+    // 检查素材中是否包含未选中角色的关键行为描述
+    for (const char of characters) {
+      if (selectedCharacterIds.includes(char.id)) continue
+      const names = [char.name, ...(char.aliases as string[] || [])].filter(Boolean)
+      for (const name of names) {
+        if (content.includes(name)) {
+          // 简单启发式：如果素材中对该角色使用了强动作动词，可能是关键情节
+          const actionPatterns = ["死亡", "牺牲", "背叛", "复活", "失踪", "结婚", "离开"]
+          if (actionPatterns.some(a => content.includes(name + a) || content.includes(a + name))) {
+            conflicts.push(`素材「${call.sourceTitle || "未知来源"}」涉及未选中角色"${name}"的关键情节，可能影响故事一致性`)
+          }
+        }
+      }
+    }
+
+    // 检查素材中的时间线事件是否与正史冲突（简化版：检测年份/章节号矛盾）
+    for (const event of canonEvents) {
+      if (event.isImmutable && content.includes(event.description.slice(0, 20))) {
+        // 如果素材引用了不可变正史事件，但描述不同
+        if (!content.includes(event.description)) {
+          conflicts.push(`素材「${call.sourceTitle || "未知来源"}」对正史事件"${event.description.slice(0, 30)}..."的描述可能与正史不一致`)
+        }
+      }
+    }
+  }
+
+  return [...new Set(conflicts)] // 去重
+}
+
 async function buildBaseContext(
   seriesId: number,
   brief: string,
@@ -606,6 +646,15 @@ async function buildBaseContext(
       }
     })
   }
+
+  // 6. RAG ↔ 设定库交叉验证
+  const ragConflicts = validateRagAgainstLore(
+    ragCalls,
+    allCharacters,
+    selectedCharacterIds || [],
+    canonEvents
+  )
+  warnings.push(...ragConflicts)
 
   return { selectedChars, unselectedChars, worldBible, canonEvents, ragCalls, ragContent, warnings, prioritizedAspects }
 }
