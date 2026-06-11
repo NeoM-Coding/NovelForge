@@ -893,13 +893,15 @@ export function useStudioState() {
         materialIds: selectedMaterialIds.length > 0 ? selectedMaterialIds : undefined,
         focus: inspireFocus,
         canonFidelity: inspireCanonFidelity,
+        writingMode: params.writingMode,
+        selectedCharacterIds: selectedCharacterIds.length > 0 ? selectedCharacterIds : undefined,
       })
       setInspireResult(result)
       setShowInspirePanel(true)
     } catch (err) {
       toast.error(String(err))
     }
-  }, [selectedSeriesId, brief, selectedMaterialIds, inspireFocus, inspireCanonFidelity, inspireMutation, toast])
+  }, [selectedSeriesId, brief, selectedMaterialIds, inspireFocus, inspireCanonFidelity, params.writingMode, selectedCharacterIds, inspireMutation, toast])
 
   // 使用灵感：填充 Brief 并关闭面板
   const handleUseInspiration = useCallback((description: string, autoTitle?: string) => {
