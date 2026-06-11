@@ -226,13 +226,15 @@ export const tropeRouter = createRouter({
       // 1. 获取全部素材内容
       let contents: string[] = []
       let sourceTitles: string[] = []
+      let materialRows: Array<{ id: number; title: string; content: string; sourceType: string }> = []
       if (input.materialIds && input.materialIds.length > 0) {
         const { materials } = await import("@db/schema")
         const rows = await db
-          .select()
+          .select({ id: materials.id, title: materials.title, content: materials.content, sourceType: materials.sourceType })
           .from(materials)
           .where(eq(materials.seriesId, input.seriesId))
         const filtered = rows.filter((r) => input.materialIds!.includes(r.id))
+        materialRows = filtered
         contents = filtered.map((r) => `【${r.title}】\n${r.content}`)
         sourceTitles = filtered.map((r) => r.title)
       } else {
@@ -251,22 +253,41 @@ export const tropeRouter = createRouter({
         throw new Error("该系列暂无素材，请先上传并索引素材")
       }
 
-      // 2. 分块（每批约8000字符，按素材边界分割）
+      // 2. 分块（按素材边界分割，不切割单个素材）
       const CHUNK_TARGET = 8000
+      const MAX_BATCHES = 5
       const chunks: string[][] = []
       let currentChunk: string[] = []
       let currentLen = 0
 
       for (const content of contents) {
-        if (content.length > CHUNK_TARGET) {
+        // 单条素材超过目标长度时，尽量找自然断点分割
+        if (content.length > CHUNK_TARGET * 1.5) {
+          // 先提交当前批次
           if (currentChunk.length > 0) {
             chunks.push(currentChunk)
             currentChunk = []
             currentLen = 0
           }
-          chunks.push([content])
+          // 按段落分割长素材
+          const paragraphs = content.split(/\n\s*\n/).map(p => p.trim()).filter(Boolean)
+          let subChunk: string[] = []
+          let subLen = 0
+          for (const para of paragraphs) {
+            if (subLen + para.length > CHUNK_TARGET && subChunk.length > 0) {
+              chunks.push([subChunk.join("\n\n")])
+              subChunk = []
+              subLen = 0
+            }
+            subChunk.push(para)
+            subLen += para.length
+          }
+          if (subChunk.length > 0) {
+            chunks.push([subChunk.join("\n\n")])
+          }
           continue
         }
+
         if (currentLen + content.length > CHUNK_TARGET && currentChunk.length > 0) {
           chunks.push(currentChunk)
           currentChunk = []
@@ -279,9 +300,32 @@ export const tropeRouter = createRouter({
         chunks.push(currentChunk)
       }
 
-      // 限制最多3批，超过则截断
-      const MAX_BATCHES = 3
-      const finalChunks = chunks.slice(0, MAX_BATCHES)
+      // 限制最多 MAX_BATCHES 批，优先保留 reference_novel 和 knowledge_doc 素材
+      let finalChunks = chunks
+      if (chunks.length > MAX_BATCHES && materialRows.length > 0) {
+        // 按素材类型排序：reference_novel > knowledge_doc > 其他
+        const materialTypes = new Map(materialRows.map((r) => [r.id, r.sourceType]))
+
+        const scored = chunks.map((chunk, idx) => {
+          const typeScore = chunk.reduce((max, c) => {
+            const match = c.match(/【(.+?)】/)
+            if (!match) return max
+            const title = match[1]
+            for (const [id, type] of materialTypes) {
+              if (title.includes(String(id))) {
+                const score = type === "reference_novel" ? 3 : type === "knowledge_doc" ? 2 : 1
+                return Math.max(max, score)
+              }
+            }
+            return max
+          }, 1)
+          return { idx, score: typeScore, chunk }
+        })
+        scored.sort((a, b) => b.score - a.score)
+        finalChunks = scored.slice(0, MAX_BATCHES).sort((a, b) => a.idx - b.idx).map(s => s.chunk)
+      } else if (chunks.length > MAX_BATCHES) {
+        finalChunks = chunks.slice(0, MAX_BATCHES)
+      }
 
       // 3. 创建任务并启动后台提取
       const taskId = nextTaskId++
