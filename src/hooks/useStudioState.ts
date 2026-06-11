@@ -899,7 +899,7 @@ export function useStudioState() {
     } catch (err) {
       toast.error(String(err))
     }
-  }, [selectedSeriesId, brief, selectedMaterialIds, inspireFocus, inspireMutation, toast])
+  }, [selectedSeriesId, brief, selectedMaterialIds, inspireFocus, inspireCanonFidelity, inspireMutation, toast])
 
   // 使用灵感：填充 Brief 并关闭面板
   const handleUseInspiration = useCallback((description: string, autoTitle?: string) => {
