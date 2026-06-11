@@ -107,7 +107,7 @@ async function generateSingleChapter(
     worldBible?: typeof worldBibles.$inferSelect
     jobId?: number
   }
-): Promise<{ content: string; ragCalls: RagCall[]; warnings?: string[]; truncated?: string[] }> {
+): Promise<{ content: string; ragCalls: RagCall[]; warnings?: string[]; truncated?: string[]; isTruncated: boolean }> {
   const startTime = Date.now()
   let metricsId: number | undefined
   const db = getDb()
@@ -146,10 +146,11 @@ async function generateSingleChapter(
         { role: "user", content: `请创作第 ${chapterNumber} 章《${chapterTitle}》。要求：${chapterBrief}` },
       ],
       temperature: params.temperature ?? 0.8,
-      maxTokens: params.lengthTarget === "short" ? 4000 : params.lengthTarget === "arc" ? 12000 : 8000,
+      maxTokens: params.lengthTarget === "short" ? 6000 : params.lengthTarget === "arc" ? 16000 : 12000,
     })
 
     const content = sanitizeGeneratedContent(result.content)
+    const isTruncated = result.finishReason === "length"
 
     // 世界观一致性检查
     let worldViewCompliant: boolean | undefined
@@ -178,7 +179,7 @@ async function generateSingleChapter(
       } catch { /* ignore */ }
     }
 
-    return { content, ragCalls, warnings, truncated }
+    return { content, ragCalls, warnings, truncated, isTruncated }
   } catch (err) {
     // 失败时更新 metrics
     if (metricsId) {
@@ -1490,20 +1491,36 @@ async function generateContent(
   temperature: number,
   maxTokens: number,
   taskId?: string
-): Promise<string> {
+): Promise<{ content: string; isTruncated: boolean }> {
   const stream = streamChat({ messages, temperature, maxTokens })
   let fullContent = ""
   let chunkCount = 0
   const startTime = Date.now()
+  let isTruncated = false
 
-  for await (const chunk of stream) {
-    fullContent += chunk
-    chunkCount++
+  try {
+    while (true) {
+      const { done, value } = await stream.next()
+      if (done) {
+        if (value?.finishReason === "length") {
+          isTruncated = true
+        }
+        break
+      }
+      fullContent += value
+      chunkCount++
 
-    if (taskId && chunkCount % 15 === 0) {
-      const elapsed = Math.round((Date.now() - startTime) / 1000)
-      updateDetail(taskId, `AI 正在创作中…（已生成约 ${fullContent.length} 字，用时 ${elapsed} 秒）`)
+      if (taskId && chunkCount % 15 === 0) {
+        const elapsed = Math.round((Date.now() - startTime) / 1000)
+        updateDetail(taskId, `AI 正在创作中…（已生成约 ${fullContent.length} 字，用时 ${elapsed} 秒）`)
+      }
     }
+  } catch (err) {
+    if (fullContent.length > 0) {
+      console.warn("[generateContent] Stream error, returning partial content:", err)
+      return { content: fullContent, isTruncated: true }
+    }
+    throw err
   }
 
   if (taskId) {
@@ -1511,7 +1528,7 @@ async function generateContent(
     updateDetail(taskId, `AI 创作完成（共 ${fullContent.length} 字，用时 ${elapsed} 秒）`)
   }
 
-  return fullContent
+  return { content: fullContent, isTruncated }
 }
 
 export const generateRouter = createRouter({
@@ -1588,14 +1605,14 @@ export const generateRouter = createRouter({
         ]
 
         const maxTokens = input.parameters.lengthTarget === "short"
-          ? 4000
+          ? 6000
           : input.parameters.lengthTarget === "chapter"
-          ? 8000
-          : 12000
+          ? 12000
+          : 16000
 
         setProgress(taskId, 3, "正在构建生成上下文...")
         setProgress(taskId, 4, "AI 正在创作中...")
-        const fullContent = await generateContent(
+        const { content: fullContent, isTruncated } = await generateContent(
           messages,
           input.parameters.temperature,
           maxTokens,
@@ -1701,7 +1718,7 @@ export const generateRouter = createRouter({
 
       completeProgress(taskId, { workId: work.id, title: finalTitle })
 
-      return { content: fullContent, workId: work.id, ragCalls, warnings, autoTitle, taskId, truncated }
+      return { content: fullContent, workId: work.id, ragCalls, warnings, autoTitle, taskId, truncated, isTruncated }
     } catch (err) {
       failProgress(taskId, String(err))
       throw err
@@ -1747,7 +1764,7 @@ export const generateRouter = createRouter({
         ]
 
         setProgress(taskId, 3, "AI 正在生成大纲...")
-        const rawOutline = await generateContent(messages, input.parameters.temperature, 4000)
+        const { content: rawOutline, isTruncated } = await generateContent(messages, input.parameters.temperature, 6000)
 
         setProgress(taskId, 4, "正在解析大纲...")
         const parsedOutline = await parseOutline(rawOutline, input.outlineType)
@@ -1786,6 +1803,7 @@ export const generateRouter = createRouter({
           outline: parsedOutline,
           ragCalls,
           warnings,
+          isTruncated,
           taskId,
         }
       } catch (err) {
@@ -1866,10 +1884,10 @@ export const generateRouter = createRouter({
         { role: "user" as const, content: `请续写以下内容，保持上下文连贯：\n\n${work.generatedContent}\n\n${input.brief || "继续："}` },
       ]
 
-      const newContent = await generateContent(
+      const { content: newContent, isTruncated } = await generateContent(
         messages,
         ((work.parameters as Record<string, unknown>)?.temperature as number || 0.8) * 0.9,
-        8000
+        12000
       )
 
       const fullContent = (work.generatedContent || "") + "\n\n" + newContent
@@ -1878,7 +1896,7 @@ export const generateRouter = createRouter({
         .set({ generatedContent: fullContent })
         .where(eq(fanFictionWorks.id, input.workId))
 
-      return { content: newContent, fullContent, workId: work.id, ragCalls, warnings }
+      return { content: newContent, fullContent, workId: work.id, ragCalls, warnings, isTruncated }
     }),
 
   regenerate: publicQuery
@@ -1937,10 +1955,10 @@ export const generateRouter = createRouter({
         { role: "user" as const, content: `请重写以下段落，要求：${input.modifiedBrief}\n\n原文：\n${input.originalText}\n\n重写：` },
       ]
 
-      const regenerated = await generateContent(
+      const { content: regenerated, isTruncated } = await generateContent(
         messages,
         ((work.parameters as Record<string, unknown>)?.temperature as number || 0.8) * 1.1,
-        4000
+        6000
       )
 
       const newContent = (work.generatedContent || "").replace(input.originalText, regenerated)
@@ -1949,7 +1967,7 @@ export const generateRouter = createRouter({
         .set({ generatedContent: newContent })
         .where(eq(fanFictionWorks.id, input.workId))
 
-      return { regenerated, fullContent: newContent, workId: work.id, ragCalls, warnings }
+      return { regenerated, fullContent: newContent, workId: work.id, ragCalls, warnings, isTruncated }
     }),
 
   getWork: publicQuery
@@ -2071,7 +2089,7 @@ export const generateRouter = createRouter({
                 }
 
                 try {
-                  const { content } = await generateSingleChapter(
+                  const { content, isTruncated: chapterIsTruncated } = await generateSingleChapter(
                     workId,
                     seriesId,
                     config.chapterNumber,
@@ -2080,6 +2098,8 @@ export const generateRouter = createRouter({
                     mergedParams,
                     { ...genOptions, previousContext, jobId },
                   )
+
+                  const chapterParams = { ...mergedParams, isTruncated: chapterIsTruncated }
 
                   // 重新查询最新记录（可能在 generating 时插入了新记录）
                   const [latest] = await db
@@ -2091,7 +2111,7 @@ export const generateRouter = createRouter({
                   if (latest) {
                     await db
                       .update(fanFictionChapters)
-                      .set({ content, status: "generated", updatedAt: new Date() })
+                      .set({ content, status: "generated", parameters: chapterParams as unknown as Record<string, unknown>, updatedAt: new Date() })
                       .where(eq(fanFictionChapters.id, latest.id))
                   } else {
                     await db.insert(fanFictionChapters).values({
@@ -2100,7 +2120,7 @@ export const generateRouter = createRouter({
                       title: config.title,
                       content,
                       brief: config.brief,
-                      parameters: mergedParams,
+                      parameters: chapterParams as unknown as Record<string, unknown>,
                       status: "generated",
                     })
                   }
@@ -2357,7 +2377,7 @@ export const generateRouter = createRouter({
 
       try {
         // 5. 调用 generateSingleChapter 重新生成
-        const { content } = await generateSingleChapter(
+        const { content, isTruncated: chapterIsTruncated } = await generateSingleChapter(
           input.workId,
           work.seriesId!,
           input.chapterNumber,
@@ -2370,7 +2390,7 @@ export const generateRouter = createRouter({
         // 6. 成功后 update 为 generated
         await db
           .update(fanFictionChapters)
-          .set({ content, status: "generated", updatedAt: new Date() })
+          .set({ content, status: "generated", parameters: { ...(chapter.parameters || {}), isTruncated: chapterIsTruncated } as unknown as Record<string, unknown>, updatedAt: new Date() })
           .where(eq(fanFictionChapters.id, chapter.id))
 
         return { success: true, chapterNumber: input.chapterNumber }
