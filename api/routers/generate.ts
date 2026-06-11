@@ -770,9 +770,14 @@ async function buildOutlinePrompt(
     parts.push("")
     parts.push("【授权角色 — 仅允许使用以下角色】")
     for (const char of selectedChars) {
-      const traits = (char.personalityTraits as string[] || []).join("。") || "无性格标签"
-      const taboos = (char.taboos as string[] || []).join("。")
-      parts.push(`- ${char.name}: ${traits}${taboos ? ` | 禁忌: ${taboos}` : ""}${char.speechPatterns ? ` | 语言风格: ${char.speechPatterns}` : ""}`)
+      const traitsRaw = (char.personalityTraits as string[] || []).join("。") || "无性格标签"
+      const traits = traitsRaw.length > 100 ? traitsRaw.slice(0, 100) + "…" : traitsRaw
+      const taboosRaw = (char.taboos as string[] || []).join("。")
+      const taboos = taboosRaw.length > 50 ? taboosRaw.slice(0, 50) + "…" : taboosRaw
+      const speechPatterns = char.speechPatterns && char.speechPatterns.length > 50
+        ? char.speechPatterns.slice(0, 50) + "…"
+        : char.speechPatterns
+      parts.push(`- ${char.name}: ${traits}${taboos ? ` | 禁忌: ${taboos}` : ""}${speechPatterns ? ` | 语言风格: ${speechPatterns}` : ""}`)
     }
   }
 
@@ -1220,9 +1225,14 @@ async function buildSystemPrompt(
     charactersParts.push("")
     charactersParts.push("【授权角色 — 仅允许使用以下角色】")
     for (const char of selectedChars) {
-      const traits = (char.personalityTraits as string[] || []).join("、") || "无性格标签"
-      const taboos = (char.taboos as string[] || []).join("、")
-      charactersParts.push(`- ${char.name}: ${traits}${taboos ? ` | 禁忌: ${taboos}` : ""}${char.speechPatterns ? ` | 语言风格: ${char.speechPatterns}` : ""}`)
+      const traitsRaw = (char.personalityTraits as string[] || []).join("、") || "无性格标签"
+      const traits = traitsRaw.length > 100 ? traitsRaw.slice(0, 100) + "…" : traitsRaw
+      const taboosRaw = (char.taboos as string[] || []).join("、")
+      const taboos = taboosRaw.length > 50 ? taboosRaw.slice(0, 50) + "…" : taboosRaw
+      const speechPatterns = char.speechPatterns && char.speechPatterns.length > 50
+        ? char.speechPatterns.slice(0, 50) + "…"
+        : char.speechPatterns
+      charactersParts.push(`- ${char.name}: ${traits}${taboos ? ` | 禁忌: ${taboos}` : ""}${speechPatterns ? ` | 语言风格: ${speechPatterns}` : ""}`)
     }
   }
 
