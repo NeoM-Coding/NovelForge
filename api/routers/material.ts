@@ -1,8 +1,8 @@
 import { z } from "zod"
 import { createRouter, publicQuery } from "../middleware"
 import { getDb } from "../queries/connection"
-import { materials, translationMemory, vectorChunks, characterCards, worldBibles } from "@db/schema"
-import { eq, desc, sql, and } from "drizzle-orm"
+import { materials, translationMemory, vectorChunks, characterCards, worldBibles, materialAnalytics } from "@db/schema"
+import { eq, desc, sql, and, inArray } from "drizzle-orm"
 import { tryFixTruncatedJson } from "../lib/json-utils"
 import { findPotentialDuplicates, type PotentialDuplicate, findDuplicateAspectGroups, mergeDuplicateAspects } from "../lib/dedup-utils"
 import { autoClassifyTranslationStyle } from "../services/style-analyzer"
@@ -560,10 +560,27 @@ export const materialRouter = createRouter({
       if (input?.sourceType) {
         conditions.push(eq(materials.sourceType, input.sourceType))
       }
-      if (conditions.length > 0) {
-        return db.select().from(materials).where(and(...conditions)).orderBy(desc(materials.createdAt))
-      }
-      return db.select().from(materials).orderBy(desc(materials.createdAt))
+      const matRows = conditions.length > 0
+        ? await db.select().from(materials).where(and(...conditions)).orderBy(desc(materials.createdAt))
+        : await db.select().from(materials).orderBy(desc(materials.createdAt))
+
+      // 批量查询 analytics
+      const analyticsRows = await db
+        .select()
+        .from(materialAnalytics)
+        .where(inArray(materialAnalytics.materialId, matRows.map(m => m.id)))
+
+      const analyticsMap = new Map(analyticsRows.map(a => [a.materialId, a]))
+
+      return matRows.map(m => ({
+        ...m,
+        analytics: analyticsMap.get(m.id) || {
+          retrievalCount: 0,
+          generationUsageCount: 0,
+          positiveFeedbackCount: 0,
+          negativeFeedbackCount: 0,
+        },
+      }))
     }),
 
   create: publicQuery

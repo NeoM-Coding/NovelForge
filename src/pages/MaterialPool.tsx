@@ -719,6 +719,23 @@ export default function MaterialPool() {
                         {(m.tags as string[]).length > 0 && <span className="flex items-center gap-1"><Tag className="w-3 h-3" />{(m.tags as string[]).join(", ")}</span>}
                         {m.indexedChunks ? <span>{m.indexedChunks} chunks</span> : null}
                       </div>
+                      {m.analytics && (
+                        <div className="flex items-center gap-2 mt-2">
+                          {m.analytics.retrievalCount > 10 && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400">
+                              🔥 高频使用
+                            </span>
+                          )}
+                          {m.analytics.retrievalCount === 0 && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/5 text-white/30">
+                              ⚪ 未命中
+                            </span>
+                          )}
+                          <span className="text-[10px] text-white/30 font-mono">
+                            命中 {m.analytics.retrievalCount} 次
+                          </span>
+                        </div>
+                      )}
                       <p className="text-white/50 text-xs line-clamp-2">{m.content.slice(0, 200)}...</p>
                     </div>
                     <div className="flex items-center gap-2 ml-4 shrink-0 flex-wrap">
