@@ -30,6 +30,7 @@ export interface TokenUsage {
 export interface ChatResult {
   content: string
   usage?: TokenUsage
+  finishReason?: string
 }
 
 interface RetryConfig {
@@ -131,7 +132,7 @@ async function fetchWithRetry(
   throw lastError || new Error("All retry attempts failed")
 }
 
-export async function* streamChat(options: ChatOptions) {
+export async function* streamChat(options: ChatOptions): AsyncGenerator<string, { finishReason?: string }> {
   const response = await fetchWithRetry(
     `${BASE_URL}/chat/completions`,
     {
@@ -158,6 +159,7 @@ export async function* streamChat(options: ChatOptions) {
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ""
+  let finishReason: string | undefined
 
   try {
     while (true) {
@@ -175,6 +177,8 @@ export async function* streamChat(options: ChatOptions) {
             const data = JSON.parse(line.slice(6))
             const content = data.choices?.[0]?.delta?.content
             if (content) yield content
+            const reason = data.choices?.[0]?.finish_reason
+            if (reason) finishReason = reason
           } catch {
             // skip malformed JSON
           }
@@ -184,6 +188,8 @@ export async function* streamChat(options: ChatOptions) {
   } finally {
     reader.releaseLock()
   }
+
+  return { finishReason }
 }
 
 export async function chatCompletion(options: ChatOptions): Promise<ChatResult> {
@@ -207,11 +213,15 @@ export async function chatCompletion(options: ChatOptions): Promise<ChatResult> 
   }
 
   const data = await response.json() as {
-    choices?: Array<{ message?: { content?: string } }>
+    choices?: Array<{
+      message?: { content?: string }
+      finish_reason?: string
+    }>
     usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number }
   }
 
   const content = data.choices?.[0]?.message?.content || ""
+  const finishReason = data.choices?.[0]?.finish_reason
   const usage: TokenUsage | undefined = data.usage
     ? {
         promptTokens: data.usage.prompt_tokens,
@@ -220,7 +230,7 @@ export async function chatCompletion(options: ChatOptions): Promise<ChatResult> 
       }
     : undefined
 
-  return { content, usage }
+  return { content, usage, finishReason }
 }
 
 export async function getEmbedding(text: string): Promise<number[]> {
